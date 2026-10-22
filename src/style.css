@@ -674,3 +674,41 @@ kbd {
   85% { opacity: 1; }
   100% { opacity: 0; }
 }
+
+/* ---------- Road alerts ---------- */
+#alert {
+  position: fixed;
+  top: 78px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  border-radius: 10px;
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: clamp(12px, 2.2vw, 16px);
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  color: #1a1040;
+  background: linear-gradient(90deg, #ffd200, #ffb800);
+  box-shadow: 0 0 24px rgba(255, 210, 0, 0.55);
+}
+
+#alert.info {
+  color: #fff;
+  background: linear-gradient(90deg, var(--cyan), var(--pink));
+  box-shadow: 0 0 24px rgba(0, 240, 255, 0.45);
+}
+
+#alert.show {
+  animation: alert 3.2s ease forwards;
+}
+
+@keyframes alert {
+  0% { opacity: 0; transform: translate(-50%, -10px); }
+  8%, 20%, 32% { opacity: 1; transform: translate(-50%, 0); }
+  14%, 26% { opacity: 0.55; }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}

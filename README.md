@@ -10,6 +10,24 @@ A colorful 3D endurance racer inspired by Activision's **Enduro** (Atari 2600, 1
 | ![Sunset arriving at the desert gate](docs/sunset.png) | ![Frosty Peaks](docs/alps.png) |
 | ![Coral Coast at night](docs/coast-night.png) | ![Neon Metropolis at night](docs/city-night.png) |
 
+## Set pieces
+
+The road is laid out in designed sections: S-bends, hairpins, sweepers, hill runs, climbs and straights, with banked curves. About every 2 km there's a set piece, announced by signs and an on-screen alert:
+
+| | |
+| --- | --- |
+| ![Golden Span suspension bridge at sunset](docs/bridge.png) | ![Torii gate avenue in Sakura Valley](docs/torii.png) |
+| ![Inside a mountain tunnel](docs/tunnel.png) | ![Rock arch in the Painted Desert](docs/arch.png) |
+| ![Canyon gorge](docs/gorge.png) | ![Driving through a village](docs/village.png) |
+
+- **Tunnels:** rock, snow and neon. Headlights come on, the light drops and the engine echoes off the walls.
+- **Bridges:** an orange suspension bridge on the coast, steel arch, truss and old stone viaducts over river valleys.
+- **Canyon gorges and rock arches** in the desert.
+- **Torii avenues** with stone lanterns in Sakura Valley.
+- **Villages** with a church, a water tower and picket fences.
+- **Highway overpasses** in the city.
+- **Roadworks:** cones and a flashing arrow board close a lane. Traffic merges, and hitting the cones slows you down hard.
+
 ## How to play
 
 | Action | Keyboard | Gamepad | Touch |
@@ -69,7 +87,8 @@ Debug URL parameters: `?autostart` skips the title screen, `?s=21000` starts at 
 
 | File | What it does |
 | --- | --- |
-| `src/track.js` | Endless procedural center line (curvature/grade random walk), biome blending, sea level |
+| `src/track.js` | Section planner (curves, hairpins, hills, set pieces), banking, biome blending, sea level |
+| `src/features.js` | Set-piece models: tunnels, bridges, arches, torii, overpasses, roadworks, villages, signs |
 | `src/biomes.js` | Data for the seven biomes: palettes, terrain, props, weather, grip |
 | `src/world.js` | Streams 100 m chunks: road, kerbs, terrain strips, instanced props, biome gates |
 | `src/props.js` | Low-poly scenery models (trees, cacti, mesas, palms, buildings, lamps…) |

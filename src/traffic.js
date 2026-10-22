@@ -47,7 +47,8 @@ export class Traffic {
       const lane = Math.floor(this.rng() * 3);
       const s = minS + this.rng() * (maxS - minS);
       const clash = this.cars.some((o) => o.active && Math.abs(o.s - s) < 40 && Math.abs(o.d - LANES[lane]) < 3);
-      if (clash) continue;
+      const works = this.track.featureAt(s, 'works', 200);
+      if (clash || (works && works.lane === lane)) continue;
       car.active = true;
       car.model.visible = true;
       car.s = s;
@@ -85,11 +86,19 @@ export class Traffic {
       car.laneTimer -= dt;
       if (car.laneTimer <= 0) {
         car.laneTimer = 3 + this.rng() * 8;
-        const options = [car.lane - 1, car.lane + 1].filter((l) => l >= 0 && l < 3 && this.laneFree(car, l));
+        const closed = this.track.featureAt(car.s + 120, 'works', 140);
+        const options = [car.lane - 1, car.lane + 1].filter((l) => l >= 0 && l < 3 && this.laneFree(car, l) && (!closed || l !== closed.lane));
         if (options.length && (leader || this.rng() < 0.35)) {
           car.lane = pick(this.rng, options);
           car.targetD = LANES[car.lane];
         }
+      }
+      // Roadworks ahead: merge out of the closed lane, slowing if there's no gap.
+      const works = this.track.featureAt(car.s + 170, 'works', 170);
+      if (works && car.lane === works.lane && car.s < works.s1) {
+        car.lane = 1;
+        car.targetD = LANES[1];
+        if (!this.laneFree(car, 1) && car.s > works.s0 - 60) target = Math.min(target, 9);
       }
       car.speed += Math.max(-12, Math.min(4, target - car.speed)) * dt;
       const prevD = car.d;
@@ -116,8 +125,8 @@ export class Traffic {
       if (!car.active) continue;
       this.track.frame(car.s, f);
       const m = car.model;
-      m.position.set(f.x + f.cos * car.d, f.y, f.z + f.sin * car.d);
-      m.rotation.set(Math.atan(f.g), -f.h - car.yaw, 0, 'YXZ');
+      m.position.set(f.x + f.cos * car.d, this.track.roadY(f, car.d), f.z + f.sin * car.d);
+      m.rotation.set(Math.atan(f.g), -f.h - car.yaw, -Math.atan(f.bank), 'YXZ');
       const spin = (car.speed * dt) / 0.37;
       for (const w of car.wheels) w.rotation.x -= spin;
     }

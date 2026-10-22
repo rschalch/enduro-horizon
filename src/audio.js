@@ -50,6 +50,22 @@ export class AudioFX {
     this.musicBus = this.gain(0, this.master);
     this.sfxBus = this.gain(0, this.master);
     this.engineBus = this.gain(0, this.master);
+    // Tunnel echo: engine and effects feed short slapback delays off the walls.
+    this.tunnelSend = this.gain(0, null);
+    const tone = ctx.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.frequency.value = 2600;
+    this.tunnelSend.connect(tone);
+    for (const [time, fbAmt] of [[0.085, 0.42], [0.155, 0.35]]) {
+      const dl = ctx.createDelay(0.5);
+      dl.delayTime.value = time;
+      const fb = this.gain(fbAmt, dl);
+      tone.connect(dl);
+      dl.connect(fb);
+      dl.connect(this.master);
+    }
+    this.engineBus.connect(this.tunnelSend);
+    this.sfxBus.connect(this.tunnelSend);
     this.noise = this.makeNoise(2);
     this.buildEngine();
     this.buildAmbience();
@@ -224,6 +240,12 @@ export class AudioFX {
     this.settings.muted = m;
     this.applyVolumes();
     this.save();
+  }
+
+  // 0 = open road, 1 = deep inside a tunnel.
+  setTunnel(amount) {
+    if (!this.ctx) return;
+    this.tunnelSend.gain.setTargetAtTime(amount * 0.55, this.ctx.currentTime, 0.12);
   }
 
   toggleMute() {

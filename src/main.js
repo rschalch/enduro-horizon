@@ -16,6 +16,7 @@ import { Input } from './input.js';
 import { HUD } from './hud.js';
 import { initSettings } from './settings.js';
 import { initProps, updatePropLights } from './props.js';
+import { setFeatureEnvMap, updateFeatureLights } from './features.js';
 import { clamp, lerp, smoothstep } from './math.js';
 
 const DAY_LEN = 200; // seconds per in-game day
@@ -208,8 +209,9 @@ function autopilot() {
   // Pick the lane with the most room ahead; used on the title screen.
   let best = player.lane ?? 1;
   let bestRoom = -1;
+  const works = track.featureAt(player.s + 150, 'works', 150);
   for (let l = 0; l < 3; l++) {
-    let room = 400;
+    let room = works && works.lane === l ? 0 : 400;
     for (const c of traffic.active) {
       const ds = c.s - player.s;
       if (ds > -6 && Math.abs(c.d - LANES[l]) < 2.6) room = Math.min(room, ds);
@@ -288,6 +290,16 @@ function updatePlayer(dt, ctl) {
 
 function collide(dt) {
   player.crashCool -= dt;
+  // Plowing through the cones of a closed lane.
+  const works = track.featureAt(player.s, 'works');
+  if (works && player.s > works.s0 + 50 && Math.abs(player.d - LANES[works.lane]) < 2.6) {
+    player.v *= 1 - dt * 2.2;
+    player.shake = Math.max(player.shake, 0.35);
+    if (player.crashCool <= 0) {
+      audio.crash(0.3);
+      player.crashCool = 0.35;
+    }
+  }
   for (const c of traffic.active) {
     const ds = c.s - player.s;
     const dd = c.d - player.d;
@@ -380,13 +392,40 @@ function updateCountdown(dt) {
   }
 }
 
+// Heads-up for set pieces coming over the horizon.
+const announced = new WeakSet();
+const BRIDGE_NAMES = { suspension: 'GOLDEN SPAN BRIDGE', arch: 'ARCH BRIDGE', girder: 'RIVER BRIDGE', stone: 'OLD STONE BRIDGE' };
+function announceFeatures() {
+  for (const ft of track.featuresIn(player.s, player.s + 320)) {
+    if (announced.has(ft)) continue;
+    let text = null;
+    let tone = 'info';
+    if (ft.type === 'sign' && ft.kind === 'curve') {
+      text = `⚠ SHARP ${ft.text} CURVE · BRAKE`;
+      tone = 'warn';
+    } else if (ft.type === 'works') {
+      text = `⚠ ROADWORKS · ${ft.lane === 0 ? 'LEFT' : 'RIGHT'} LANE CLOSED`;
+      tone = 'warn';
+    } else if (ft.type === 'tunnel') text = ft.style === 'neon' ? 'NEON TUNNEL' : 'TUNNEL · LIGHTS ON';
+    else if (ft.type === 'bridge') text = BRIDGE_NAMES[ft.style] || 'BRIDGE';
+    else if (ft.type === 'gorge') text = 'CANYON RUN';
+    else if (ft.type === 'torii') text = 'SHRINE AVENUE';
+    else if (ft.type === 'village') text = 'WELCOME TO SUNNYVALE';
+    announced.add(ft);
+    if (text) {
+      hud.alert(text, tone);
+      return;
+    }
+  }
+}
+
 // ---------- Presentation ----------
 function placeCar(dt) {
   track.frame(player.s, fr);
-  car.position.set(fr.x + fr.cos * player.d, fr.y + Math.max(-0.06, player.bob || 0), fr.z + fr.sin * player.d);
+  car.position.set(fr.x + fr.cos * player.d, track.roadY(fr, player.d) + Math.max(-0.06, player.bob || 0), fr.z + fr.sin * player.d);
   const slip = Math.atan2(player.latV - player.drift, Math.max(player.v, 6));
   player.yawVis = lerp(player.yawVis, slip * 0.8, 1 - Math.exp(-dt * 10));
-  car.rotation.set(Math.atan(fr.g), -fr.h - player.yawVis, player.yawVis * 0.3, 'YXZ');
+  car.rotation.set(Math.atan(fr.g), -fr.h - player.yawVis, player.yawVis * 0.3 - Math.atan(fr.bank), 'YXZ');
   const spin = (player.v * dt) / 0.37;
   for (const w of car.userData.wheels) w.rotation.x -= spin;
   for (const p of car.userData.frontWheels || []) p.rotation.y = lerp(p.rotation.y, -ctl.steer * 0.35, 1 - Math.exp(-dt * 12));
@@ -397,14 +436,15 @@ function updateCamera(dt) {
   const ahead = track.frame(player.s + 16, cf2);
   player.camD = lerp(player.camD, player.d * 0.85, 1 - Math.exp(-dt * 6));
   const d = player.camD;
-  camera.position.set(back.x + back.cos * d, back.y + 3.1, back.z + back.sin * d);
+  camera.position.set(back.x + back.cos * d, track.roadY(back, d) + 3.1, back.z + back.sin * d);
   const sh = player.shake;
   if (sh > 0) {
     camera.position.x += (Math.random() - 0.5) * sh;
     camera.position.y += (Math.random() - 0.5) * sh;
     player.shake = Math.max(0, sh - dt * 1.8);
   }
-  camera.lookAt(ahead.x + ahead.cos * d, ahead.y + 1.1, ahead.z + ahead.sin * d);
+  camera.lookAt(ahead.x + ahead.cos * d, track.roadY(ahead, d) + 1.1, ahead.z + ahead.sin * d);
+  camera.rotateZ(-Math.atan(back.bank) * 0.55); // lean with the banking
   const fov = 60 + (player.v / MAX_V) * 14;
   if (Math.abs(camera.fov - fov) > 0.05) {
     camera.fov = fov;
@@ -412,8 +452,16 @@ function updateCamera(dt) {
   }
 }
 
-function updateLights(night, braking) {
-  updatePropLights(night, performance.now() / 1000);
+// 0 outside, 1 deep inside a tunnel.
+function tunnelFactor(s) {
+  const t = track.featureAt(s, 'tunnel');
+  if (!t) return 0;
+  return smoothstep(t.s0, t.s0 + 35, s) * smoothstep(t.s1, t.s1 - 35, s);
+}
+
+function updateLights(sceneNight, braking, tunnel = 0) {
+  updatePropLights(sceneNight, performance.now() / 1000);
+  const night = Math.max(sceneNight, tunnel); // car lights come on in tunnels too
   trafficLights.tail.emissiveIntensity = 0.8 + night * 3.2;
   trafficLights.head.emissiveIntensity = 0.3 + night * 3;
   const L = car.userData.lights;
@@ -422,7 +470,7 @@ function updateLights(night, braking) {
   car.userData.glow.opacity = 0.04 + night * 0.96;
   car.userData.spot.intensity = night * 160;
   beamMaterial.opacity = night * 0.6;
-  bloom.strength = 0.35 + night * 0.6;
+  bloom.strength = (0.35 + night * 0.6) * (1 - 0.5 * tunnel);
 }
 
 function weatherFor(bw) {
@@ -462,9 +510,13 @@ function frame(now) {
   const bw = track.blend(player.s);
   const coastSeg = track.coastSegmentNear(player.s, 1600);
   const tod = env.update(state.dayT, dt, car.position, camera, bw, coastSeg >= 0 ? track.waterLevel(coastSeg) : null);
-  updateLights(tod.night, ctl.brake > 0 && player.v > 1);
+  const tf = tunnelFactor(player.s);
+  env.hemi.intensity *= 1 - 0.8 * tf;
+  env.sun.intensity *= 1 - 0.9 * tf;
+  audio.setTunnel?.(tf);
+  updateLights(tod.night, ctl.brake > 0 && player.v > 1, tf);
   const [wType, wWeight] = weatherFor(bw);
-  weather.update(dt, camera.position, wType, wWeight, tod.night);
+  weather.update(dt, camera.position, wType, wWeight * (1 - tf), tod.night);
   audio.setEngine({
     rpm: player.rpmReal || IDLE_RPM,
     throttle: state.mode === 'countdown' ? ctl.rev : ctl.throttle,
@@ -476,13 +528,18 @@ function frame(now) {
     braking: ctl.brake > 0,
   });
   const envTex = env.updateEnvMap(renderer, dt);
-  if (envTex) setCarEnvMap(envTex);
+  if (envTex) {
+    setCarEnvMap(envTex);
+    setFeatureEnvMap(envTex, env.waveMap);
+  }
+  updateFeatureLights(tod.night, now / 1000);
   renderer.toneMappingExposure = tod.exp;
   grade.uniforms.sat.value = tod.sat;
   grade.uniforms.con.value = tod.con;
   gradeTint.copy(tod.tint).convertLinearToSRGB();
   grade.uniforms.tint.value.setRGB(1, 1, 1).lerp(gradeTint, 0.6);
 
+  if (state.mode === 'race') announceFeatures();
   const dom = bw.t > 0.5 ? bw.b : bw.a;
   const domIdx = bw.t > 0.5 ? bw.seg + 1 : bw.seg;
   if (domIdx !== state.biomeIdx) {

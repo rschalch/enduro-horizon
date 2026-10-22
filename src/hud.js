@@ -49,6 +49,19 @@ export class HUD {
     el.classList.add('show');
   }
 
+  alert(text, tone = 'warn') {
+    let el = this.$('alert');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'alert';
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.className = '';
+    void el.offsetWidth;
+    el.className = `show ${tone}`;
+  }
+
   nowPlaying(title, artist) {
     const el = this.$('nowPlaying');
     el.innerHTML = `<span class="np-icon">♪</span><span><b>${title}</b><small>${artist}</small></span>`;

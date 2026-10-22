@@ -74,7 +74,7 @@ export function setCarEnvMap(texture) {
   }
 }
 
-const glassMat = envMat(new THREE.MeshPhysicalMaterial({ color: 0x0b1320, metalness: 0.1, roughness: 0.05, side: THREE.DoubleSide }), 1.3);
+const glassMat = envMat(new THREE.MeshPhysicalMaterial({ color: 0x0b1320, metalness: 0.1, roughness: 0.2, side: THREE.DoubleSide }), 1.3);
 const trimMat = new THREE.MeshStandardMaterial({ color: 0x17181d, metalness: 0.3, roughness: 0.6 });
 const tireMat = new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.92, side: THREE.DoubleSide });
 const chromeMat = envMat(new THREE.MeshStandardMaterial({ color: 0xe6e9ef, metalness: 1, roughness: 0.22 }), 1);
@@ -90,7 +90,7 @@ function paintMat(color) {
   if (!paintMats.has(color)) {
     paintMats.set(
       color,
-      envMat(new THREE.MeshPhysicalMaterial({ color, metalness: 0.35, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.12 }), 0.9),
+      envMat(new THREE.MeshPhysicalMaterial({ color, metalness: 0.35, roughness: 0.38, clearcoat: 1, clearcoatRoughness: 0.22 }), 0.9),
     );
   }
   return paintMats.get(color);

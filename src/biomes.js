@@ -8,6 +8,8 @@
 export const BIOMES = [
   {
     key: 'meadow',
+    sections: { straight: 2, sweeper: 3, esses: 2, hills: 3, bridge: 0.9, village: 0.8, works: 0.5 },
+    featureStyle: { bridge: 'stone' },
     name: 'Sunny Meadows',
     accent: ['#3ddc84', '#ffd23f'],
     ground: [0x79d65a, 0x4fb53c],
@@ -29,6 +31,8 @@ export const BIOMES = [
   },
   {
     key: 'desert',
+    sections: { straight: 3, sweeper: 3, hills: 1.5, climb: 1, gorge: 1.3, arch: 0.9, works: 0.4, bridge: 0.3 },
+    featureStyle: { bridge: 'arch' },
     name: 'Painted Desert',
     accent: ['#ff7a18', '#af002d'],
     ground: [0xf0a35e, 0xdc7a3c],
@@ -48,6 +52,8 @@ export const BIOMES = [
   },
   {
     key: 'coast',
+    sections: { straight: 2, sweeper: 3, esses: 1.5, bridge: 1.1, tunnel: 0.6, works: 0.3 },
+    featureStyle: { bridge: 'suspension', tunnel: 'rock' },
     name: 'Coral Coast',
     accent: ['#00c6ff', '#0072ff'],
     ground: [0xf6e1a0, 0xecd08a],
@@ -67,6 +73,8 @@ export const BIOMES = [
   },
   {
     key: 'sakura',
+    sections: { straight: 1.5, sweeper: 2, esses: 2.5, hills: 2, torii: 1.4, bridge: 0.6, village: 0.4 },
+    featureStyle: { bridge: 'arch' },
     name: 'Sakura Valley',
     accent: ['#ff9a9e', '#fad0c4'],
     ground: [0x9fe0a0, 0x7fcf8a],
@@ -88,6 +96,8 @@ export const BIOMES = [
   },
   {
     key: 'alps',
+    sections: { sweeper: 2, esses: 2.5, hairpin: 2, climb: 1.5, tunnel: 1.4, bridge: 0.7 },
+    featureStyle: { bridge: 'arch', tunnel: 'snow' },
     name: 'Frosty Peaks',
     accent: ['#6a85ff', '#a1e3ff'],
     ground: [0xf6f9ff, 0xdde7f5],
@@ -107,6 +117,8 @@ export const BIOMES = [
   },
   {
     key: 'autumn',
+    sections: { sweeper: 2.5, esses: 2.5, hills: 2, hairpin: 0.8, tunnel: 0.7, bridge: 0.9, works: 0.5 },
+    featureStyle: { bridge: 'girder', tunnel: 'rock' },
     name: 'Amber Woods',
     accent: ['#f83600', '#f9d423'],
     ground: [0xc9a04a, 0xa8873a],
@@ -128,6 +140,8 @@ export const BIOMES = [
   },
   {
     key: 'city',
+    sections: { straight: 3, sweeper: 2, esses: 0.5, overpass: 1.6, tunnel: 0.9, works: 1.0 },
+    featureStyle: { tunnel: 'neon', bridge: 'girder' },
     name: 'Neon Metropolis',
     accent: ['#ff00cc', '#3333ff'],
     ground: [0x3a3f58, 0x2c3048],

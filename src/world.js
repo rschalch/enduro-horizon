@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BIOME_BLEND, BIOME_LEN, HALF_W, STEP, biomeForSegment } from './track.js';
 import { BILLBOARD, MATS, PROPS } from './props.js';
+import { buildFeatures } from './features.js';
 import { fbm, hash2, lerp, mulberry32, pick, smoothstep } from './math.js';
 
 // Streams the world in 100 m chunks: road, kerbs, terrain and instanced props.
@@ -210,8 +211,24 @@ export class World {
     });
   }
 
-  // Terrain height at lateral offset d for a track frame.
-  heightAt(f, d, bw, water) {
+  // How set pieces reshape the land at distance s.
+  mods(s) {
+    const m = { drop: 0, lid: 0, cliff: 0, gorge: 0, calm: 0 };
+    for (const ft of this.track.featuresIn(s - 130, s + 130)) {
+      if (ft.type === 'bridge') m.drop = Math.max(m.drop, ft.depth * smoothstep(ft.s0, ft.s0 + 45, s) * smoothstep(ft.s1, ft.s1 - 45, s));
+      else if (ft.type === 'tunnel') {
+        if (s >= ft.s0 && s <= ft.s1) m.lid = 1;
+        const c = s < ft.s0 ? smoothstep(ft.s0 - 120, ft.s0, s) : s > ft.s1 ? smoothstep(ft.s1 + 120, ft.s1, s) : 1;
+        m.cliff = Math.max(m.cliff, c);
+      } else if (ft.type === 'gorge') m.gorge = Math.max(m.gorge, smoothstep(ft.s0, ft.s0 + 90, s) * smoothstep(ft.s1, ft.s1 - 90, s));
+      else if (ft.type !== 'sign') m.calm = Math.max(m.calm, smoothstep(ft.s0 - 70, ft.s0, s) * smoothstep(ft.s1 + 70, ft.s1, s));
+    }
+    return m;
+  }
+
+  // Terrain height at lateral offset d for a track frame. dShape is the
+  // uncompressed offset used for the valley-wall profile on tight curves.
+  heightAt(f, d, bw, water, mods = this.mods(f.s), dShape = d) {
     const wx = f.x + f.cos * d;
     const wz = f.z + f.sin * d;
     const ad = Math.abs(d);
@@ -221,7 +238,7 @@ export class World {
     const n2 = fbm(wx * 0.0025 + 50, wz * 0.0025 - 20, 3);
     const near = smoothstep(HALF_W + 4, 70, ad);
     let y = f.y - 0.12 + near * n1 * hills;
-    const wallY = Math.pow(smoothstep(70, 200, ad), 1.6) * wall * (0.45 + n2);
+    const wallY = Math.pow(smoothstep(70, 200, Math.abs(dShape)), 1.6) * wall * (0.45 + n2);
     if (bw.coastW > 0 && d < 0) {
       const drop = smoothstep(HALF_W + 8, 50, ad);
       const beach = lerp(f.y - 0.12 + near * n1 * 2, water - 4, drop);
@@ -229,6 +246,10 @@ export class World {
     } else {
       y += wallY;
     }
+    if (mods.calm > 0) y = lerp(y, f.y - 0.12 + near * n1 * 2, mods.calm * 0.75);
+    if (mods.gorge > 0 && ad > 14) y = Math.max(y, f.y + mods.gorge * (6 + 62 * smoothstep(14, 30, ad) + n2 * 28 + fbm(wx * 0.06, wz * 0.06, 2) * 9));
+    if (mods.cliff > 0 && ad > HALF_W + 2.5) y = Math.max(y, f.y + mods.cliff * (27 + n1 * 14 + smoothstep(30, 120, ad) * 25));
+    if (mods.drop > 0.3) y = Math.min(y, f.y - mods.drop + n1 * 5);
     return y;
   }
 
@@ -246,7 +267,7 @@ export class World {
     const rel = y - f.y;
     const rockC = tmpColor.setHex(bw.a.rock).lerp(tmpColor2.setHex(bw.b.rock), bw.t);
     const strata = 0.75 + 0.25 * Math.sin(y * 0.35 + n * 3);
-    out.lerp(rockC.multiplyScalar(strata), smoothstep(95, 165, ad) * smoothstep(8, 30, rel) * 0.75);
+    out.lerp(rockC.multiplyScalar(strata), Math.max(smoothstep(95, 165, ad) * smoothstep(8, 30, rel) * 0.75, smoothstep(4, 14, rel) * smoothstep(HALF_W + 2, 16, ad) * 0.85));
     if (rel > 60) out.lerp(tmpColor.setRGB(0.95, 0.97, 1), smoothstep(60, 110, rel) * 0.8);
     if (bw.coastW > 0 && d < 0 && y < water + 1.5) out.lerp(tmpColor.setHex(0xc9a86a), 0.6 * bw.coastW);
     const jitter = 0.9 + hash2(Math.floor(wx * 0.3), Math.floor(wz * 0.3)) * 0.18;
@@ -259,7 +280,7 @@ export class World {
     const i0 = c * CS;
     const sStart = i0 * STEP;
     const sEnd = (i0 + CS) * STEP;
-    T.ensure(sEnd + 10);
+    T.ensure(sEnd + 650); // plan ahead so features and their warning signs are known
     const group = new THREE.Group();
     const rows = CS + 1;
     const frames = [];
@@ -269,6 +290,7 @@ export class World {
       frames.push(T.frame(s, {}));
       blends.push(T.blend(s));
     }
+    const mods = frames.map((f) => this.mods(f.s));
     const coastSeg = T.coastSegmentNear(sStart);
     const water = coastSeg >= 0 ? T.waterLevel(coastSeg) : -1e6;
 
@@ -278,7 +300,7 @@ export class World {
         const f = frames[k];
         const d = j ? HALF_W : -HALF_W;
         v.x = f.x + f.cos * d;
-        v.y = f.y + 0.02;
+        v.y = T.roadY(f, d) + 0.02;
         v.z = f.z + f.sin * d;
         v.u = j;
         v.w = f.s / 20;
@@ -297,7 +319,7 @@ export class World {
           const f = frames[k];
           const d = side < 0 ? (j ? inner : outer) : j ? outer : inner;
           v.x = f.x + f.cos * d;
-          v.y = f.y + 0.06;
+          v.y = T.roadY(f, d) + 0.06;
           v.z = f.z + f.sin * d;
           v.u = j;
           v.w = f.s / 8;
@@ -315,8 +337,17 @@ export class World {
       const geo = makeStrip(rows, cols, (k, j, v) => {
         const f = frames[k];
         const bw = blends[k];
-        const d = side < 0 ? -TERRAIN_COLS[cols - 1 - j] : TERRAIN_COLS[j];
-        const y = j === (side < 0 ? cols - 1 : 0) ? f.y - 0.05 : this.heightAt(f, d, bw, water);
+        const dShape = side < 0 ? -TERRAIN_COLS[cols - 1 - j] : TERRAIN_COLS[j];
+        // On the inside of tight curves, squeeze the terrain so it never folds over itself.
+        let d = dShape;
+        const maxInner = f.k !== 0 ? 0.8 / Math.abs(f.k) : 1e9;
+        if (Math.sign(f.k) === side && maxInner < 200 && Math.abs(d) > 20) d = side * (20 + (Math.abs(d) - 20) * Math.max(0.2, (maxInner - 20) / 180));
+        const m = mods[k];
+        const edge = j === (side < 0 ? cols - 1 : 0);
+        let y;
+        if (edge && m.lid) y = f.y + 23.5;
+        else if (edge && m.drop <= 0.3) y = T.roadY(f, d) - 0.05;
+        else y = this.heightAt(f, d, bw, water, m, dShape);
         v.x = f.x + f.cos * d;
         v.y = y;
         v.z = f.z + f.sin * d;
@@ -327,11 +358,36 @@ export class World {
       }, { colors: true });
       const mesh = new THREE.Mesh(geo, this.terrainMat);
       mesh.receiveShadow = true;
+      mesh.castShadow = mods.some((m) => m.lid || m.cliff > 0.5);
       group.add(mesh);
+    }
+
+    // Mountain lid over tunnel sections, closing the gap above the road.
+    const lidRows = [];
+    mods.forEach((m, k) => m.lid && lidRows.push(k));
+    if (lidRows.length > 1) {
+      const lid = new THREE.Mesh(
+        makeStrip(lidRows.length, 2, (k, j, v) => {
+          const f = frames[lidRows[k]];
+          const d = j ? HALF_W + 1.2 : -(HALF_W + 1.2);
+          v.x = f.x + f.cos * d;
+          v.y = f.y + 23.5;
+          v.z = f.z + f.sin * d;
+          this.groundColor(f, d, f.y + 23.5, blends[lidRows[k]], water, col);
+          v.r = col.r;
+          v.g = col.g;
+          v.b = col.b;
+        }, { colors: true }),
+        this.terrainMat,
+      );
+      lid.castShadow = true;
+      lid.receiveShadow = true;
+      group.add(lid);
     }
 
     this.placeProps(group, c, sStart, sEnd, water);
     this.placeGates(group, sStart, sEnd);
+    buildFeatures(group, T, sStart, sEnd, { heightAt: (f, d) => this.heightAt(f, d, T.blend(f.s), water) });
     return group;
   }
 
@@ -357,6 +413,8 @@ export class World {
           if (def.onWater) side = -1;
           const d = side * (def.minD + Math.pow(rng(), 1.4) * (def.maxD - def.minD));
           T.frame(s, f);
+          if (Math.sign(d) === Math.sign(f.k) && Math.abs(d) > 0.8 / Math.abs(f.k || 1e-9) - 6) continue;
+          if ((def.align || def.faceTraffic) && Math.abs(d) < 60 && this.mods(s).gorge > 0.2) continue;
           const y = this.heightAt(f, d, bw, water);
           const seaSide = bw.coastW > 0.3 && d < 0;
           if (def.onWater) {
@@ -378,16 +436,28 @@ export class World {
       for (let s = Math.ceil(sStart / sp) * sp; s < sEnd; s += sp) {
         const bw = T.blend(s);
         const biome = bw.t > 0.5 ? bw.b : bw.a;
-        if (biome.posts !== type) continue;
+        if (biome.posts !== type || this.covered(s)) continue;
         T.frame(s, f);
         for (const side of [-1, 1]) {
           const d = side * (HALF_W + (type === 'lamp' ? 2.6 : 2.0));
-          add(type, f.x + f.cos * d, f.y - 0.05, f.z + f.sin * d, -f.h + (side < 0 ? Math.PI : 0), 1, 0xffffff);
+          add(type, f.x + f.cos * d, T.roadY(f, d) - 0.05, f.z + f.sin * d, -f.h + (side < 0 ? Math.PI : 0), 1, 0xffffff);
         }
       }
     }
 
     this.placeRoadside(group, sStart, sEnd, add, rng);
+
+    // Villages: rows of houses facing the road.
+    for (const ft of T.featuresIn(sStart, sEnd)) {
+      if (ft.type !== 'village') continue;
+      for (let s = Math.max(sStart, ft.s0); s < Math.min(sEnd, ft.s1); s += 18 + rng() * 14) {
+        T.frame(s, f);
+        const side = rng() < 0.5 ? -1 : 1;
+        const d = side * (22 + rng() * 14);
+        const bw = T.blend(s);
+        add('house', f.x + f.cos * d, this.heightAt(f, d, bw, water), f.z + f.sin * d, -f.h + (side < 0 ? Math.PI / 2 : -Math.PI / 2), 0.9 + rng() * 0.3, 0xffffff);
+      }
+    }
 
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
@@ -419,6 +489,11 @@ export class World {
     }
   }
 
+  // Inside a tunnel or on a bridge: no roadside posts, rails or signs of our own.
+  covered(s) {
+    return !!(this.track.featureAt(s, 'tunnel', 8) || this.track.featureAt(s, 'bridge', 8));
+  }
+
   // Fences, power lines, guardrails and curve chevrons.
   placeRoadside(group, sStart, sEnd, add, rng) {
     const T = this.track;
@@ -429,7 +504,7 @@ export class World {
 
     if (rs.fence) {
       for (let s = Math.ceil(sStart / 4) * 4; s < sEnd; s += 4) {
-        if (fbm(s * 0.004, 7.3, 2) < 0.48) continue;
+        if (fbm(s * 0.004, 7.3, 2) < 0.48 || this.track.featureAt(s, 'village', 30) || this.covered(s)) continue;
         T.frame(s, f);
         for (const side of [-1, 1]) {
           const d = side * (HALF_W + 6.5);
@@ -441,6 +516,10 @@ export class World {
     if (rs.power) {
       const tops = [];
       for (let s = Math.ceil(sStart / 45) * 45; s <= sEnd; s += 45) {
+        if (this.covered(s) || this.mods(s).gorge > 0.1) {
+          tops.push(null); // gap in the line
+          continue;
+        }
         T.frame(s, f);
         const d = HALF_W + 11;
         const y = this.heightAt(f, d, T.blend(s), -1e6);
@@ -451,6 +530,7 @@ export class World {
       for (let i = 0; i < tops.length - 1; i++) {
         const a = tops[i];
         const b = tops[i + 1];
+        if (!a || !b) continue;
         for (const off of [-1.4, 1.4]) {
           for (let k = 0; k < 8; k++) {
             for (const kk of [k, k + 1]) {
@@ -472,7 +552,7 @@ export class World {
       }
     }
 
-    if (rs.rails) {
+    if (rs.rails && !this.covered(sStart) && !this.covered(sEnd)) {
       const sides = rs.rails === 'sea' ? [-1] : [-1, 1];
       for (const side of sides) {
         const d = side * (HALF_W + 1.9);
@@ -480,7 +560,7 @@ export class World {
         const geo = makeStrip(rows, 2, (k, j, v) => {
           T.frame(sStart + k * STEP, f);
           v.x = f.x + f.cos * d;
-          v.y = f.y + (j ? 0.78 : 0.42);
+          v.y = T.roadY(f, d) + (j ? 0.78 : 0.42);
           v.z = f.z + f.sin * d;
         });
         const rail = new THREE.Mesh(geo, this.railMat);
@@ -488,7 +568,7 @@ export class World {
         group.add(rail);
         for (let s = Math.ceil(sStart / 4) * 4; s < sEnd; s += 4) {
           T.frame(s, f);
-          add('railPost', f.x + f.cos * (d + side * 0.12), f.y, f.z + f.sin * (d + side * 0.12), -f.h, 1, 0xffffff);
+          add('railPost', f.x + f.cos * (d + side * 0.12), T.roadY(f, d), f.z + f.sin * (d + side * 0.12), -f.h, 1, 0xffffff);
         }
       }
     }
@@ -496,10 +576,10 @@ export class World {
     // Chevrons on the outside of sharp curves.
     for (let s = Math.ceil(sStart / 22) * 22; s < sEnd; s += 22) {
       T.frame(s, f);
-      if (Math.abs(f.k) < 0.0019) continue;
+      if (Math.abs(f.k) < 0.0019 || this.covered(s)) continue;
       const side = f.k > 0 ? -1 : 1;
       const d = side * (HALF_W + (rs.rails ? 3.0 : 2.4));
-      add(f.k > 0 ? 'chevR' : 'chevL', f.x + f.cos * d, f.y, f.z + f.sin * d, -f.h, 1, 0xffffff);
+      add(f.k > 0 ? 'chevR' : 'chevL', f.x + f.cos * d, T.roadY(f, d), f.z + f.sin * d, -f.h, 1, 0xffffff);
     }
   }
 
