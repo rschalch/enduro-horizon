@@ -49,6 +49,14 @@ export class HUD {
     el.classList.add('show');
   }
 
+  nowPlaying(title, artist) {
+    const el = this.$('nowPlaying');
+    el.innerHTML = `<span class="np-icon">♪</span><span><b>${title}</b><small>${artist}</small></span>`;
+    el.classList.remove('show');
+    void el.offsetWidth;
+    el.classList.add('show');
+  }
+
   center(text, cls = '', ms = 1200) {
     const el = this.$('center');
     el.textContent = text;

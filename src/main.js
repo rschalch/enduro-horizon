@@ -3,22 +3,27 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import './style.css';
 import { HALF_W, LANES, Track } from './track.js';
 import { World } from './world.js';
 import { Environment } from './sky.js';
-import { buildPlayerCar, trafficLights } from './cars.js';
+import { beamMaterial, buildPlayerCar, setCarEnvMap, trafficLights } from './cars.js';
 import { Traffic } from './traffic.js';
 import { Weather } from './weather.js';
 import { AudioFX } from './audio.js';
 import { Input } from './input.js';
 import { HUD } from './hud.js';
+import { initSettings } from './settings.js';
 import { initProps, updatePropLights } from './props.js';
-import { clamp, lerp } from './math.js';
+import { clamp, lerp, smoothstep } from './math.js';
 
 const DAY_LEN = 200; // seconds per in-game day
 const MAX_V = 63; // m/s, ~227 km/h
-const GEARS = [0, 13, 24, 35, 45, 54, 90];
+// Top speed (m/s) of each gear at the redline; index 0 unused.
+const GEAR_TOP = [0, 16, 27, 37, 47, 56, 66];
+const IDLE_RPM = 900;
+const REDLINE = 7600;
 const params = new URLSearchParams(location.search);
 const START_S = Number(params.get('s')) || 40;
 const coarse = matchMedia('(pointer: coarse)').matches;
@@ -40,6 +45,27 @@ const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
+// Final color grade (in display space): saturation, contrast, warm/cool tint, vignette.
+const grade = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, sat: { value: 1 }, con: { value: 1 }, tint: { value: new THREE.Color(1, 1, 1) }, vig: { value: 0.18 } },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float sat; uniform float con; uniform vec3 tint; uniform float vig;
+    varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      vec3 col = c.rgb;
+      float l = dot(col, vec3(0.299, 0.587, 0.114));
+      col = mix(vec3(l), col, sat);
+      col = (col - 0.5) * con + 0.5;
+      col *= tint;
+      col *= 1.0 - vig * smoothstep(0.35, 0.9, distance(vUv, vec2(0.5)));
+      gl_FragColor = vec4(clamp(col, 0.0, 1.0), c.a);
+    }`,
+});
+composer.addPass(grade);
+const gradeTint = new THREE.Color();
+
 // ---------- Game objects ----------
 initProps();
 const newSeed = () => Number(params.get('seed')) || Math.floor(Math.random() * 1e9);
@@ -51,6 +77,8 @@ const weather = new Weather(scene);
 const audio = new AudioFX();
 const input = new Input();
 const hud = new HUD();
+initSettings(audio);
+audio.onSongChange = (title, artist) => hud.nowPlaying(title, artist);
 const car = buildPlayerCar();
 scene.add(car);
 
@@ -96,7 +124,7 @@ function applyQuality() {
 function resetRun(mode) {
   track = new Track(newSeed());
   world.setTrack(track);
-  Object.assign(player, { s: START_S, d: mode === 'title' ? LANES[1] : 0, v: mode === 'title' ? 40 : 0, latV: 0, yawVis: 0, camD: 0, shake: 0 });
+  Object.assign(player, { s: START_S, d: mode === 'title' ? LANES[1] : 0, v: mode === 'title' ? 40 : 0, latV: 0, yawVis: 0, camD: 0, shake: 0, gear: 1, rpmReal: IDLE_RPM, bob: 0, bobV: 0, shiftT: 0 });
   Object.assign(state, { day: 1, passed: 0, totalPassed: 0, target: targetFor(1), odo: 0, goalShown: false, biomeIdx: -1 });
   state.dayT = params.has('t') ? Number(params.get('t')) : mode === 'title' ? 0.5 : 0.03;
   traffic.reset(track, player.s, mode === 'title' ? 18 : densityFor(1));
@@ -204,11 +232,13 @@ function updatePlayer(dt, ctl) {
   const offroad = Math.abs(player.d) > HALF_W + 0.9;
   const vmax = offroad ? 24 : MAX_V;
   let acc;
+  player.shiftT = Math.max(0, (player.shiftT || 0) - dt);
+  const power = player.shiftT > 0 ? 0.25 : 1; // brief torque cut while shifting
   if (ctl.brake > 0) acc = -34 * ctl.brake;
-  else if (ctl.throttle > 0) acc = player.v < vmax ? 17 * ctl.throttle * (1 - Math.pow(player.v / vmax, 2)) + 1 : 0;
+  else if (ctl.throttle > 0) acc = player.v < vmax ? (17 * ctl.throttle * (1 - Math.pow(player.v / vmax, 2)) + 1) * power : 0;
   else acc = -3 - player.v * 0.03;
   if (player.v > vmax) acc = Math.min(acc, -(player.v - vmax) * 1.6);
-  acc -= 9.8 * fr.g * 0.6;
+  acc -= 9.8 * fr.g * 0.35;
   player.v = clamp(player.v + acc * dt, 0, 80);
 
   const steerRate = (5 + Math.min(player.v, 60) * 0.17) * Math.min(1, player.v / 4);
@@ -224,10 +254,35 @@ function updatePlayer(dt, ctl) {
   player.offroad = offroad;
   if (offroad && player.v > 5) player.shake = Math.max(player.shake, 0.12);
 
-  let g = 1;
-  while (g < GEARS.length - 1 && player.v > GEARS[g]) g++;
+  // Automatic gearbox: upshift near the redline, downshift when lugging.
+  let g = player.gear || 1;
+  const rpmAt = (gear) => IDLE_RPM + (player.v / GEAR_TOP[gear]) * (REDLINE - IDLE_RPM);
+  if (g < 6 && rpmAt(g) > 7250) {
+    g++;
+    player.shiftT = 0.16;
+  } else if (g > 1 && rpmAt(g - 1) < 6000 && rpmAt(g) < 3700) {
+    g--;
+  }
   player.gear = g;
-  player.rpm = clamp((player.v - GEARS[g - 1]) / (GEARS[g] - GEARS[g - 1]), 0, 1) * 0.75 + 0.25;
+  let target = Math.min(REDLINE + 150, rpmAt(g));
+  if (state.mode === 'countdown') target = IDLE_RPM + ctl.rev * 6200; // free revs on the grid
+  if (player.shiftT > 0) target *= 0.92;
+  player.rpmReal = lerp(player.rpmReal || IDLE_RPM, Math.max(IDLE_RPM, target), 1 - Math.exp(-dt * 12));
+  player.rpm = player.rpmReal / REDLINE; // 0..1 for anything that wants a normalized value
+
+  // Tire squeal: hard cornering relative to grip, or heavy braking at speed.
+  const lateral = Math.abs(player.latV - player.drift) + Math.abs(player.drift) * 0.6;
+  const corner = smoothstep(7, 16, lateral * (player.v / MAX_V) * 1.6);
+  const brakeSlip = ctl.brake > 0 && player.v > 12 ? 0.55 : 0;
+  player.slip = offroad ? 0 : clamp((corner + brakeSlip) * (0.4 + 0.6 * grip), 0, 1);
+
+  // Suspension: the car floats over crests and squats into dips.
+  const g0 = track.frame(player.s - 6, cf1).g;
+  const g1 = track.frame(player.s + 6, cf2).g;
+  const vAcc = player.v * player.v * ((g1 - g0) / 12);
+  player.bobV = (player.bobV || 0) + ((clamp(-vAcc * 0.03, -0.12, 0.35) - (player.bob || 0)) * 90 - player.bobV * 11) * dt;
+  player.bob = (player.bob || 0) + player.bobV * dt;
+  player.air = vAcc < -8.5 ? 1 : 0;
   return ctl;
 }
 
@@ -256,9 +311,10 @@ function collide(dt) {
       player.latV = -sign * 6;
       player.v *= 0.82;
     }
+    const hit = clamp(Math.abs(player.v - c.speed) / 25 + 0.25, 0, 1);
     player.shake = 0.6;
     if (player.crashCool <= 0) {
-      audio.crash();
+      audio.crash(hit);
       player.crashCool = 0.5;
     }
   }
@@ -271,6 +327,8 @@ function countPasses() {
       c.wasAhead = ahead;
       if (state.mode !== 'race') continue;
       const delta = ahead ? -1 : 1;
+      const side = c.d - player.d;
+      if (Math.abs(side) < 7) audio.whoosh(clamp(side / 5, -1, 1));
       state.passed = Math.max(0, state.passed + delta);
       state.totalPassed = Math.max(0, state.totalPassed + delta);
       audio.pass(delta > 0);
@@ -325,12 +383,13 @@ function updateCountdown(dt) {
 // ---------- Presentation ----------
 function placeCar(dt) {
   track.frame(player.s, fr);
-  car.position.set(fr.x + fr.cos * player.d, fr.y, fr.z + fr.sin * player.d);
+  car.position.set(fr.x + fr.cos * player.d, fr.y + Math.max(-0.06, player.bob || 0), fr.z + fr.sin * player.d);
   const slip = Math.atan2(player.latV - player.drift, Math.max(player.v, 6));
   player.yawVis = lerp(player.yawVis, slip * 0.8, 1 - Math.exp(-dt * 10));
   car.rotation.set(Math.atan(fr.g), -fr.h - player.yawVis, player.yawVis * 0.3, 'YXZ');
   const spin = (player.v * dt) / 0.37;
   for (const w of car.userData.wheels) w.rotation.x -= spin;
+  for (const p of car.userData.frontWheels || []) p.rotation.y = lerp(p.rotation.y, -ctl.steer * 0.35, 1 - Math.exp(-dt * 12));
 }
 
 function updateCamera(dt) {
@@ -354,7 +413,7 @@ function updateCamera(dt) {
 }
 
 function updateLights(night, braking) {
-  updatePropLights(night);
+  updatePropLights(night, performance.now() / 1000);
   trafficLights.tail.emissiveIntensity = 0.8 + night * 3.2;
   trafficLights.head.emissiveIntensity = 0.3 + night * 3;
   const L = car.userData.lights;
@@ -362,6 +421,7 @@ function updateLights(night, braking) {
   L.head.emissiveIntensity = 1 + night * 3;
   car.userData.glow.opacity = 0.04 + night * 0.96;
   car.userData.spot.intensity = night * 160;
+  beamMaterial.opacity = night * 0.6;
   bloom.strength = 0.35 + night * 0.6;
 }
 
@@ -383,7 +443,7 @@ function frame(now) {
   if (state.mode !== 'paused') {
     if (state.mode === 'title') ctl = autopilot();
     else if (state.mode === 'race') ctl = { steer: input.steer, throttle: input.throttle, brake: input.brake };
-    else ctl = { steer: 0, throttle: 0, brake: state.mode === 'gameover' ? 0.3 : 0 };
+    else ctl = { steer: 0, throttle: 0, brake: state.mode === 'gameover' ? 0.3 : 0, rev: input.throttle };
     if (state.mode === 'countdown') updateCountdown(dt);
     const prevS = player.s;
     updatePlayer(dt, ctl);
@@ -395,6 +455,7 @@ function frame(now) {
   }
 
   world.update(player.s);
+  world.animate(now / 1000);
   placeCar(dt);
   updateCamera(dt);
 
@@ -404,7 +465,23 @@ function frame(now) {
   updateLights(tod.night, ctl.brake > 0 && player.v > 1);
   const [wType, wWeight] = weatherFor(bw);
   weather.update(dt, camera.position, wType, wWeight, tod.night);
-  audio.setEngine(player.rpm, ctl.throttle, player.v, player.offroad && player.v > 5, state.mode !== 'title');
+  audio.setEngine({
+    rpm: player.rpmReal || IDLE_RPM,
+    throttle: state.mode === 'countdown' ? ctl.rev : ctl.throttle,
+    speed: player.v,
+    gear: player.gear,
+    slip: player.slip || 0,
+    offroad: player.offroad && player.v > 5,
+    active: state.mode !== 'title',
+    braking: ctl.brake > 0,
+  });
+  const envTex = env.updateEnvMap(renderer, dt);
+  if (envTex) setCarEnvMap(envTex);
+  renderer.toneMappingExposure = tod.exp;
+  grade.uniforms.sat.value = tod.sat;
+  grade.uniforms.con.value = tod.con;
+  gradeTint.copy(tod.tint).convertLinearToSRGB();
+  grade.uniforms.tint.value.setRGB(1, 1, 1).lerp(gradeTint, 0.6);
 
   const dom = bw.t > 0.5 ? bw.b : bw.a;
   const domIdx = bw.t > 0.5 ? bw.seg + 1 : bw.seg;

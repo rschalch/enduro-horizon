@@ -99,6 +99,11 @@ export class Weather {
         if (rel > HALF[a]) p[i * 3 + a] -= HALF[a] * 2;
         else if (rel < -HALF[a]) p[i * 3 + a] += HALF[a] * 2;
       }
+      // Flakes right in front of the lens look like giant blobs; push them away.
+      const rx = p[i * 3] - center[0];
+      const ry = p[i * 3 + 1] - center[1];
+      const rz = p[i * 3 + 2] - center[2];
+      if (rx * rx + ry * ry + rz * rz < 16) p[i * 3 + 1] = center[1] + HALF[1] * 0.9;
     }
     this.geo.attributes.position.needsUpdate = true;
   }

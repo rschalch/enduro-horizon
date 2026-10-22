@@ -77,6 +77,8 @@ function building(w, h, d) {
 
 export const MATS = {};
 export const PROPS = {};
+// Biomes list 'billboard'; each placement picks one of the ad variants.
+export const BILLBOARD = { variants: [], minD: 16, maxD: 60, scale: [0.9, 1.2], faceTraffic: true, tint: [0xffffff] };
 
 export function initProps() {
   const [winMap, winEmi] = windowTextures();
@@ -86,9 +88,13 @@ export function initProps() {
     palmTrunk: new THREE.MeshStandardMaterial({ color: 0xb98d5a, flatShading: true, roughness: 1 }),
     white: new THREE.MeshStandardMaterial({ color: 0xf4f6fa, flatShading: true, roughness: 0.8 }),
     dark: new THREE.MeshStandardMaterial({ color: 0x2a2d36, metalness: 0.6, roughness: 0.4 }),
-    glow: new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 2.2, 2.2) }),
+    glow: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.5, 1.5, 1.5) }),
     bulb: new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.85, 0.6) }),
     reflector: new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.5, 0.1) }),
+    beacon: new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 0.1, 0.1) }),
+    pool: new THREE.MeshBasicMaterial({ map: radialTexture(), color: 0x000000, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
+    fence: new THREE.MeshStandardMaterial({ color: 0x8a5a36, flatShading: true, roughness: 1 }),
+    metal: new THREE.MeshStandardMaterial({ color: 0xb8c0cc, metalness: 0.7, roughness: 0.35 }),
     building: new THREE.MeshStandardMaterial({
       map: winMap,
       emissiveMap: winEmi,
@@ -208,11 +214,200 @@ export function initProps() {
     ],
     noShadow: true,
   };
+  // Warm pool of light on the road under each lamp, visible at night.
+  PROPS.lamp.parts.push([shared(new THREE.PlaneGeometry(9, 9).rotateX(-Math.PI / 2).translate(-3.4, 0.12, 0)), 'pool']);
+
+  // ---------- Countryside ----------
+  PROPS.poplar = {
+    parts: [
+      [shared(cyl(0.18, 0.26, 2.2, 6)), 'trunk'],
+      [merge([ico(1.4, 0, 3.6, 0).scale(1, 1.9, 1), ico(1.1, 0, 7.6, 0).scale(1, 1.4, 1)]), 'tint'],
+    ],
+    minD: 14, maxD: 160, scale: [0.9, 1.5], tint: greens,
+  };
+  const blades = [];
+  for (let i = 0; i < 5; i++) {
+    const a = rng() * Math.PI * 2;
+    const r = 0.15 + rng() * 0.35;
+    blades.push(cone(0.06, 0.5 + rng() * 0.4, 3, Math.cos(a) * r, 0, Math.sin(a) * r).rotateZ((rng() - 0.5) * 0.4));
+  }
+  PROPS.grass = { parts: [[merge(blades), 'tint']], minD: 9.4, maxD: 45, scale: [0.8, 1.8], tint: greens, noShadow: true };
+  PROPS.house = {
+    parts: [
+      [merge([box(7, 3.6, 6), box(0.7, 1.6, 0.7, 1.8, 4.6, 1)]), 'tint', [0xfff4e0, 0xf6e0c0, 0xe8f0ff, 0xffe8e8, 0xdff5e0]],
+      [shared(new THREE.CylinderGeometry(4.3, 4.3, 7.4, 3, 1).rotateZ(Math.PI / 2).rotateX(-Math.PI / 2).scale(1, 0.48, 0.86).translate(0, 4.6, 0)), 'tint', [0xc0392b, 0x8e3b2a, 0x34495e, 0x6a4a8a, 0x2e6b4a]],
+      [merge([box(1.1, 1.1, 0.1, -1.8, 1.4, 3.02), box(1.1, 1.1, 0.1, 1.8, 1.4, 3.02), box(1.0, 1.9, 0.1, 0, 0, 3.02), box(0.1, 1.1, 1.1, -3.52, 1.4, 0)]), 'bulb'],
+    ],
+    minD: 30, maxD: 170, scale: [0.9, 1.3], align: true, tint: [0xffffff],
+  };
+  PROPS.cabin = {
+    parts: [
+      [shared(box(5, 2.8, 4.5)), 'trunk'],
+      [shared(new THREE.CylinderGeometry(3.4, 3.4, 5.8, 3, 1).rotateZ(Math.PI / 2).rotateX(-Math.PI / 2).scale(1, 0.5, 0.86).translate(0, 3.6, 0)), 'white'],
+      [merge([box(0.9, 0.9, 0.1, -1.3, 1.1, 2.27), box(0.9, 0.9, 0.1, 1.3, 1.1, 2.27)]), 'bulb'],
+    ],
+    minD: 25, maxD: 120, scale: [0.9, 1.2], align: true, tint: [0xffffff],
+  };
+  const bladeGeo = [];
+  for (let i = 0; i < 3; i++) bladeGeo.push(box(0.5, 17, 0.18, 0, 0.6).rotateZ((i / 3) * Math.PI * 2));
+  PROPS.turbine = {
+    parts: [
+      [merge([cyl(0.7, 1.3, 38, 8), box(1.4, 1.4, 4, 0, 37.6, -0.6)]), 'white'],
+      [shared(box(0.5, 0.5, 0.5, 0, 38.5, 0.7)), 'beacon'],
+      [merge(bladeGeo.concat([ico(0.8, 0, 0, 0)])), 'white', null, { spin: { y: 38.3, z: 1.6, speed: 1.4 } }],
+    ],
+    minD: 90, maxD: 200, scale: [0.8, 1.1], align: true, tint: [0xffffff], noShadow: true,
+  };
+  PROPS.deadTree = {
+    parts: [[merge([
+      cyl(0.16, 0.28, 3.4, 5),
+      cyl(0.07, 0.12, 1.8, 4).rotateZ(0.8).translate(0.5, 2.0, 0),
+      cyl(0.06, 0.1, 1.5, 4).rotateZ(-0.9).translate(-0.4, 2.5, 0),
+      cyl(0.05, 0.08, 1.2, 4).rotateX(0.9).translate(0, 2.8, 0.3),
+    ]), 'trunk']],
+    minD: 14, maxD: 160, scale: [0.8, 1.6],
+  };
+  PROPS.umbrella = {
+    parts: [
+      [shared(cyl(0.05, 0.05, 2.4, 4)), 'white'],
+      [shared(new THREE.ConeGeometry(1.6, 0.7, 8).translate(0, 2.55, 0)), 'tint'],
+    ],
+    beach: true, minD: 15, maxD: 38, scale: [0.9, 1.2], tint: [0xff3b6b, 0xffd23f, 0x3bc9ff, 0x7cff4f, 0xff8c1a, 0xffffff], noShadow: false,
+  };
+  PROPS.bldD = {
+    parts: [
+      [merge([building(18, 40, 18), building(12, 30, 12).translate(0, 40, 0), building(6, 16, 6).translate(0, 70, 0)]), 'building'],
+      [shared(cyl(0.15, 0.2, 14, 4, 0, 86, 0)), 'dark'],
+      [shared(box(0.7, 0.7, 0.7, 0, 99.6, 0)), 'beacon'],
+    ],
+    minD: 40, maxD: 190, scale: [0.8, 1.2], align: true, tint: bldTint,
+  };
+
+  // 80s billboards: one atlas, one geometry per ad.
+  const atlas = billboardAtlas();
+  MATS.billboard = new THREE.MeshStandardMaterial({ map: atlas, emissiveMap: atlas, emissive: 0xffffff, emissiveIntensity: 0.1, roughness: 0.7, side: THREE.DoubleSide });
+  const legs = merge([cyl(0.18, 0.18, 6, 6, -3.8), cyl(0.18, 0.18, 6, 6, 3.8), box(12.4, 0.3, 0.6, 0, 5.6, 0.2)]);
+  for (let i = 0; i < ADS.length; i++) {
+    const g = new THREE.PlaneGeometry(12, 3.6).translate(0, 7.8, 0);
+    const uv = g.attributes.uv;
+    for (let k = 0; k < uv.count; k++) uv.setY(k, 1 - (i + 1 - uv.getY(k)) / ADS.length);
+    PROPS['billboard' + i] = {
+      parts: [[legs, 'dark'], [shared(g), 'billboard']],
+      minD: 16, maxD: 60, scale: [0.9, 1.2], faceTraffic: true,
+    };
+    BILLBOARD.variants.push('billboard' + i);
+  }
+
+  // Roadside furniture placed at regular spacing by the world.
+  PROPS.fence = {
+    parts: [[merge([box(0.18, 1.2, 0.18), box(0.08, 0.14, 4, 0, 0.45, -2), box(0.08, 0.14, 4, 0, 0.95, -2)]), 'fence']],
+    noShadow: true,
+  };
+  PROPS.powerPole = {
+    parts: [[merge([cyl(0.16, 0.22, 11, 6), box(3.2, 0.2, 0.2, 0, 10.2), box(0.1, 0.3, 0.1, -1.4, 10.4), box(0.1, 0.3, 0.1, 1.4, 10.4)]), 'trunk']],
+  };
+  PROPS.railPost = { parts: [[shared(box(0.14, 0.75, 0.14)), 'metal']], noShadow: true };
+  const chev = chevronTexture();
+  MATS.sign = new THREE.MeshStandardMaterial({ map: chev, emissiveMap: chev, emissive: 0xffffff, emissiveIntensity: 0.1, roughness: 0.5, side: THREE.DoubleSide });
+  for (const dir of [1, -1]) {
+    const g = new THREE.PlaneGeometry(1.3, 1.3).translate(0, 1.75, 0.08);
+    if (dir < 0) {
+      const uv = g.attributes.uv;
+      for (let k = 0; k < uv.count; k++) uv.setX(k, 1 - uv.getX(k));
+    }
+    PROPS[dir > 0 ? 'chevR' : 'chevL'] = { parts: [[shared(box(0.1, 1.2, 0.1)), 'dark'], [shared(g), 'sign']], noShadow: true };
+  }
 }
 
 // Brightness of emissive scenery follows the night factor.
-export function updatePropLights(night) {
+export function updatePropLights(night, time = 0) {
   MATS.building.emissiveIntensity = 0.06 + night * 0.65;
   MATS.bulb.color.setRGB(0.6 + night * 3.0, 0.5 + night * 2.4, 0.3 + night * 1.4);
   MATS.reflector.color.setRGB(0.9 + night * 2.2, 0.4 + night * 0.9, 0.05);
+  MATS.pool.color.setRGB(night * 0.55, night * 0.4, night * 0.2);
+  MATS.pool.visible = night > 0.05;
+  const blink = Math.sin(time * 3) > 0.6 ? 1 : 0.15;
+  MATS.beacon.color.setRGB(0.5 + blink * night * 3, 0.05, 0.05);
+  MATS.billboard.emissiveIntensity = 0.12 + night * 0.9;
+  MATS.sign.emissiveIntensity = 0.1 + night * 0.5;
+}
+
+const ADS = [
+  { title: 'SUNSET COLA', sub: 'TASTE THE HORIZON', bg: ['#ff6a00', '#ee0979'], fg: '#fff' },
+  { title: 'TURBO TAPES', sub: 'C-90 CHROME · REWIND THE 80s', bg: ['#00c6ff', '#7b2bff'], fg: '#fff' },
+  { title: 'NEON FM 88.5', sub: 'SYNTHWAVE ALL NIGHT LONG', bg: ['#1a0033', '#ff00cc'], fg: '#00f0ff' },
+  { title: 'RAD ARCADE', sub: 'INSERT COIN · 2 PLAYERS', bg: ['#ffd23f', '#ff3b3b'], fg: '#1a1040' },
+  { title: 'CHROME MOTORS', sub: 'BUILT FOR THE LONG ROAD', bg: ['#d7dde8', '#757f9a'], fg: '#b3001b' },
+];
+
+function billboardAtlas() {
+  const W = 1024;
+  const H = 308;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H * ADS.length;
+  const g = c.getContext('2d');
+  ADS.forEach((ad, i) => {
+    const y = i * H;
+    const grad = g.createLinearGradient(0, y, W, y + H);
+    grad.addColorStop(0, ad.bg[0]);
+    grad.addColorStop(1, ad.bg[1]);
+    g.fillStyle = grad;
+    g.fillRect(0, y, W, H);
+    // Retro sun stripes.
+    g.fillStyle = 'rgba(255,255,255,0.12)';
+    for (let k = 0; k < 6; k++) g.fillRect(0, y + H - 30 - k * 22, W, 8 - k);
+    g.strokeStyle = 'rgba(255,255,255,0.85)';
+    g.lineWidth = 12;
+    g.strokeRect(6, y + 6, W - 12, H - 12);
+    g.textAlign = 'center';
+    g.fillStyle = ad.fg;
+    g.shadowColor = 'rgba(0,0,0,0.35)';
+    g.shadowBlur = 10;
+    g.font = 'italic 900 120px Orbitron, "Arial Black", sans-serif';
+    g.fillText(ad.title, W / 2, y + 160, W - 60);
+    g.font = '700 40px Orbitron, "Arial Black", sans-serif';
+    g.fillText(ad.sub, W / 2, y + 240, W - 80);
+    g.shadowBlur = 0;
+  });
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
+function chevronTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ffd200';
+  g.fillRect(0, 0, 128, 128);
+  g.fillStyle = '#111';
+  g.beginPath();
+  g.moveTo(34, 14);
+  g.lineTo(62, 14);
+  g.lineTo(100, 64);
+  g.lineTo(62, 114);
+  g.lineTo(34, 114);
+  g.lineTo(72, 64);
+  g.closePath();
+  g.fill();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+function radialTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(0.5, 'rgba(255,255,255,0.45)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
 }

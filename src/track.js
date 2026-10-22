@@ -55,15 +55,23 @@ export class Track {
       this.kTarget = k;
     }
     if (--this.gLeft <= 0) {
-      this.gLeft = Math.floor((200 + r() * 500) / STEP);
-      this.gTarget = r() < 0.3 ? 0 : (r() * 2 - 1) * maxG;
+      // Rolling hills: mostly alternate climbs and descents so the road crests
+      // and dips, with the occasional long flat or long climb.
+      const long = r() < 0.12;
+      this.gLeft = Math.floor((long ? 400 + r() * 300 : 70 + r() * 170) / STEP);
+      const flat = r() < 0.1;
+      const sign = r() < 0.8 ? -Math.sign(this.gTarget || this.g[i] || 1) : Math.sign(this.gTarget || 1);
+      this.gTarget = flat ? 0 : sign * maxG * (0.7 + 0.3 * r());
+      // Keep the road from drifting too far from its starting altitude.
+      if (this.y[i] > 160) this.gTarget = -Math.abs(this.gTarget);
+      if (this.y[i] < -160) this.gTarget = Math.abs(this.gTarget);
     }
     const kT = s < 500 ? 0 : this.kTarget;
     const gT = s < 400 ? 0 : clamp(this.gTarget, -maxG, maxG);
 
     const dk = (maxK / 45) || 0.00005;
     const k = clamp(this.k[i] + clamp(kT - this.k[i], -dk, dk), -maxK - 0.0002, maxK + 0.0002);
-    const g = this.g[i] + clamp(gT - this.g[i], -0.0012, 0.0012);
+    const g = this.g[i] + clamp(gT - this.g[i], -0.0034, 0.0034);
     const nh = clamp(h + k * STEP, -1.25, 1.25);
 
     this.x.push(this.x[i] + Math.sin(nh) * STEP);

@@ -7,6 +7,8 @@ import { mulberry32, pick } from './math.js';
 
 const COLORS = [0x2ec4ff, 0xffd23f, 0xff8c1a, 0x7cff4f, 0x9b5cff, 0xf5f5f5, 0x3a66ff, 0xff3b3b, 0x00e0b0, 0xff6ad5];
 const POOL = 36;
+// Trucks are 1 in 9; the rest is a mix of coupes, sedans, hatchbacks, vans and pickups.
+const MIX = ['sport', 'sedan', 'hatch', 'sedan', 'van', 'sport', 'pickup', 'hatch', 'truck'];
 
 export class Traffic {
   constructor(scene) {
@@ -14,8 +16,8 @@ export class Traffic {
     this.rng = mulberry32(2024);
     this.cars = [];
     for (let i = 0; i < POOL; i++) {
-      const type = i % 6 === 5 ? 'truck' : i % 2 ? 'sedan' : 'sport';
-      const model = buildCar(type, COLORS[i % COLORS.length]);
+      const type = MIX[i % MIX.length];
+      const model = buildCar(type, COLORS[(i * 7) % COLORS.length]);
       model.visible = false;
       scene.add(model);
       this.cars.push({ model, type, active: false, s: 0, d: 0, lane: 1, targetD: 0, speed: 0, base: 0, wasAhead: true, yaw: 0, ...model.userData });
@@ -51,7 +53,7 @@ export class Traffic {
       car.s = s;
       car.lane = lane;
       car.d = car.targetD = LANES[lane];
-      car.base = (car.type === 'truck' ? 22 : 25) + this.rng() * 13;
+      car.base = (car.type === 'truck' ? 22 : car.type === 'van' ? 24 : 25) + this.rng() * 13;
       car.speed = car.base;
       car.wasAhead = s > playerS;
       car.laneTimer = 2 + this.rng() * 6;
@@ -93,6 +95,8 @@ export class Traffic {
       const prevD = car.d;
       car.d += Math.max(-2.2 * dt, Math.min(2.2 * dt, car.targetD - car.d));
       car.yaw = Math.atan2(car.d - prevD, Math.max(1, car.speed * dt)) * 1.5;
+      const steer = -Math.max(-0.35, Math.min(0.35, (car.targetD - car.d) * 0.12));
+      for (const p of car.frontWheels) p.rotation.y = steer;
       car.s += car.speed * dt;
     }
 

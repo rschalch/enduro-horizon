@@ -46,11 +46,14 @@ const ringVert = /* glsl */ `
 `;
 const ringFrag = /* glsl */ `
   uniform vec3 colTop; uniform vec3 colBottom; uniform float windows;
+  uniform vec3 snowCol; uniform float snow; uniform float snowLine;
   varying float vShade;
   varying vec2 vUv;
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   void main() {
     vec3 col = mix(colBottom, colTop, vShade);
+    float cap = smoothstep(snowLine, snowLine + 90.0, vUv.y + sin(vUv.x * 0.05) * 40.0);
+    col = mix(col, snowCol, cap * snow);
     if (windows > 0.0) {
       vec2 cell = floor(vUv / vec2(5.0, 6.0));
       vec2 f = fract(vUv / vec2(5.0, 6.0));
@@ -62,6 +65,42 @@ const ringFrag = /* glsl */ `
     #include <colorspace_fragment>
   }
 `;
+
+// Tileable ripple normal map for the ocean (sum of integer-frequency waves).
+function waveNormalMap() {
+  const N = 128;
+  const hgt = new Float32Array(N * N);
+  const rng = mulberry32(77);
+  const waves = [];
+  for (let i = 0; i < 9; i++) waves.push([1 + Math.floor(rng() * 6), Math.floor(rng() * 7) - 3, rng() * 6.28, 0.5 + rng()]);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      let v = 0;
+      for (const [kx, ky, ph, a] of waves) v += Math.sin(((kx * x + ky * y) / N) * Math.PI * 2 + ph) * a / (kx + Math.abs(ky));
+      hgt[y * N + x] = v;
+    }
+  }
+  const data = new Uint8Array(N * N * 4);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const dx = hgt[y * N + ((x + 1) % N)] - hgt[y * N + ((x + N - 1) % N)];
+      const dy = hgt[((y + 1) % N) * N + x] - hgt[((y + N - 1) % N) * N + x];
+      const n = new THREE.Vector3(-dx * 2, -dy * 2, 1).normalize();
+      const i = (y * N + x) * 4;
+      data[i] = (n.x * 0.5 + 0.5) * 255;
+      data[i + 1] = (n.y * 0.5 + 0.5) * 255;
+      data[i + 2] = (n.z * 0.5 + 0.5) * 255;
+      data[i + 3] = 255;
+    }
+  }
+  const t = new THREE.DataTexture(data, N, N);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.generateMipmaps = true;
+  t.needsUpdate = true;
+  return t;
+}
 
 function buildRing(radius, segs, heightFn, base = -260) {
   const pos = [];
@@ -97,7 +136,14 @@ function buildRing(radius, segs, heightFn, base = -260) {
 
 function ringMaterial() {
   return new THREE.ShaderMaterial({
-    uniforms: { colTop: { value: new THREE.Color() }, colBottom: { value: new THREE.Color() }, windows: { value: 0 } },
+    uniforms: {
+      colTop: { value: new THREE.Color() },
+      colBottom: { value: new THREE.Color() },
+      windows: { value: 0 },
+      snowCol: { value: new THREE.Color() },
+      snow: { value: 0 },
+      snowLine: { value: 800 },
+    },
     vertexShader: ringVert,
     fragmentShader: ringFrag,
     side: THREE.DoubleSide,
@@ -178,6 +224,17 @@ export class Environment {
     );
     this.mountains.frustumCulled = false;
     scene.add(this.mountains);
+    // A nearer, lower ridge line for depth.
+    this.ridgeMat = ringMaterial();
+    this.ridge = new THREE.Mesh(
+      buildRing(1900, 300, (i, a0, a1) => {
+        const h = (a) => 30 + Math.pow(fbm(Math.cos(a) * 7 + 31, Math.sin(a) * 7 - 5, 4), 1.4) * 360;
+        return [h(a0), h(a1)];
+      }),
+      this.ridgeMat,
+    );
+    this.ridge.frustumCulled = false;
+    scene.add(this.ridge);
     this.skylineMat = ringMaterial();
     this.skyline = new THREE.Mesh(
       buildRing(1700, 420, (i) => {
@@ -221,7 +278,17 @@ export class Environment {
     scene.add(this.clouds);
 
     // Ocean
-    this.oceanMat = new THREE.MeshStandardMaterial({ color: 0x0fa3c4, roughness: 0.12, metalness: 0.2 });
+    this.waveMap = waveNormalMap();
+    this.waveMap.repeat.set(500, 500);
+    this.oceanMat = new THREE.MeshStandardMaterial({ color: 0x0fa3c4, roughness: 0.08, metalness: 0.15, normalMap: this.waveMap, normalScale: new THREE.Vector2(0.55, 0.55) });
+
+    // Sky-only scene used to build a reflection environment map for cars and water.
+    this.envScene = new THREE.Scene();
+    this.envSky = new THREE.Mesh(new THREE.SphereGeometry(100, 32, 16), this.skyMat);
+    this.envScene.add(this.envSky);
+    this.envTimer = 0;
+    this.envTarget = null;
+    this.pmrem = null;
     this.ocean = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000).rotateX(-Math.PI / 2), this.oceanMat);
     this.ocean.receiveShadow = true;
     this.ocean.visible = false;
@@ -245,6 +312,19 @@ export class Environment {
     scene.add(this.sun, this.sun.target);
 
     scene.fog = new THREE.Fog(0xffffff, 100, 1000);
+  }
+
+  // Rebuild the reflection map from the current sky every couple of seconds.
+  updateEnvMap(renderer, dt, force = false) {
+    this.envTimer -= dt;
+    if (!force && this.envTimer > 0) return null;
+    this.envTimer = 2;
+    this.pmrem ||= new THREE.PMREMGenerator(renderer);
+    const old = this.envTarget;
+    this.envTarget = this.pmrem.fromScene(this.envScene, 0.02);
+    old?.dispose();
+    this.oceanMat.envMap = this.envTarget.texture;
+    return this.envTarget.texture;
   }
 
   // t: time of day [0,1); focus: world position of the player; blend: biome blend.
@@ -290,6 +370,22 @@ export class Environment {
     this.mountainMat.uniforms.colBottom.value.copy(k.hor);
     this.mountains.visible = cityW < 0.98;
     this.mountains.position.set(cp.x, cp.y - 80, cp.z);
+    const snowW = (blend.a.snowcaps ? 1 - blend.t : 0) + (blend.b.snowcaps ? blend.t : 0);
+    const desertW = (blend.a.key === 'desert' ? 1 - blend.t : 0) + (blend.b.key === 'desert' ? blend.t : 0);
+    const snowCol = new THREE.Color(0.95, 0.97, 1).multiplyScalar(light).lerp(k.hor, 1 - 0.75 * haze);
+    const mu = this.mountainMat.uniforms;
+    mu.snowCol.value.copy(snowCol);
+    mu.snow.value = (0.35 + 0.65 * snowW) * (1 - desertW) * (1 - cityW);
+    mu.snowLine.value = lerp(980, 640, snowW);
+    const ru = this.ridgeMat.uniforms;
+    const rcol = mcol.clone().multiplyScalar(0.72).lerp(new THREE.Color(blend.a.rock).lerp(new THREE.Color(blend.b.rock), blend.t).multiplyScalar(light), 0.35);
+    ru.colTop.value.copy(k.hor).lerp(rcol, 0.7 * (1 - cityW) * haze);
+    ru.colBottom.value.copy(k.hor).lerp(rcol, 0.25 * (1 - cityW) * haze);
+    ru.snowCol.value.copy(snowCol);
+    ru.snow.value = snowW;
+    ru.snowLine.value = 420;
+    this.ridge.visible = cityW < 0.98;
+    this.ridge.position.set(cp.x, cp.y - 60, cp.z);
     const scol = new THREE.Color(0x30355a).multiplyScalar(light);
     this.skylineMat.uniforms.colTop.value.copy(k.hor).lerp(scol, 0.7 * cityW * haze);
     this.skylineMat.uniforms.colBottom.value.copy(k.hor);
@@ -298,7 +394,8 @@ export class Environment {
     this.skyline.position.set(cp.x, cp.y - 60, cp.z);
 
     // Clouds drift and wrap around the camera.
-    const cloudCol = new THREE.Color(1, 1, 1).lerp(k.hor, 0.35).multiplyScalar(0.12 + (1 - k.night) * 0.98);
+    // Clouds pick up the sun's color, so they glow orange and pink at the ends of the day.
+    const cloudCol = new THREE.Color(1, 1, 1).lerp(k.sun, 0.45).lerp(k.hor, 0.2).multiplyScalar(0.12 + (1 - k.night) * 0.98);
     this.cloudMat.color.copy(cloudCol);
     this.cloudMat.opacity = (0.92 - k.night * 0.6) * haze;
     const m = new THREE.Matrix4();
@@ -324,7 +421,9 @@ export class Environment {
     if (waterLevel !== null) {
       this.ocean.visible = true;
       this.ocean.position.set(cp.x, waterLevel, cp.z);
-      this.oceanMat.color.setHex(0x0fa3c4).lerp(k.hor, 0.25).multiplyScalar(0.4 + (1 - k.night) * 0.6);
+      this.oceanMat.color.setHex(0x0b8fb0).lerp(k.hor, 0.2).multiplyScalar(0.35 + (1 - k.night) * 0.65);
+      this.waveMap.offset.x += dt * 0.004;
+      this.waveMap.offset.y += dt * 0.0025;
     } else {
       this.ocean.visible = false;
     }

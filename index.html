@@ -50,7 +50,20 @@
       </div>
     </div>
 
+    <button id="soundBtn" aria-label="Sound settings (O)" title="Sound settings (O)">🔊</button>
+    <div id="soundPanel" class="hidden" role="dialog" aria-label="Sound settings">
+      <div class="shead"><span>SOUND</span><button id="soundClose" aria-label="Close">✕</button></div>
+      <div id="soundSliders"></div>
+      <div class="sbtns">
+        <button id="muteBtn">Mute all</button>
+        <button id="musicBtn">Music: on</button>
+      </div>
+      <div class="ssong"><span id="songName">♪</span><button id="nextSongBtn" title="Next song (N)">Next ⏭</button></div>
+      <div class="shint"><kbd>O</kbd> sound · <kbd>M</kbd> music · <kbd>N</kbd> next song</div>
+    </div>
+
     <div id="toast"></div>
+    <div id="nowPlaying"></div>
     <div id="center"></div>
 
     <div id="title" class="screen">
@@ -65,6 +78,7 @@
         <span><kbd>↓</kbd><kbd>S</kbd> brake</span>
         <span><kbd>←</kbd><kbd>→</kbd> steer</span>
         <span><kbd>M</kbd> music</span>
+        <span><kbd>O</kbd> sound</span>
         <span><kbd>P</kbd> pause</span>
         <span><kbd>Q</kbd> quality</span>
       </div>

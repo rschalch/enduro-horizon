@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BIOME_BLEND, BIOME_LEN, HALF_W, STEP, biomeForSegment } from './track.js';
-import { MATS, PROPS } from './props.js';
+import { BILLBOARD, MATS, PROPS } from './props.js';
 import { fbm, hash2, lerp, mulberry32, pick, smoothstep } from './math.js';
 
 // Streams the world in 100 m chunks: road, kerbs, terrain and instanced props.
@@ -9,7 +9,7 @@ const CS = 50; // samples per chunk
 export const CHUNK_LEN = CS * STEP;
 const AHEAD = 1600;
 const BEHIND = 120;
-const TERRAIN_COLS = [HALF_W + 1.2, HALF_W + 3, HALF_W + 6, 20, 28, 40, 56, 76, 100, 128, 160, 200];
+const TERRAIN_COLS = [HALF_W + 1.2, HALF_W + 3, HALF_W + 6, 17, 21, 26, 32, 40, 50, 62, 76, 92, 110, 132, 156, 178, 200];
 
 const tmpColor = new THREE.Color();
 const tmpColor2 = new THREE.Color();
@@ -143,6 +143,8 @@ export class World {
     this.kerbMat = new THREE.MeshStandardMaterial({ map: kerbTexture(), roughness: 0.7 });
     this.terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
     this.pillarMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4, metalness: 0.3 });
+    this.railMat = new THREE.MeshStandardMaterial({ color: 0xc8d0dc, metalness: 0.75, roughness: 0.3, side: THREE.DoubleSide });
+    this.cableMat = new THREE.LineBasicMaterial({ color: 0x1a1a22 });
   }
 
   setTrack(track) {
@@ -167,6 +169,32 @@ export class World {
       this.chunks.set(c, ch);
       this.scene.add(ch);
       built++;
+    }
+  }
+
+  // Turn wind turbine rotors.
+  animate(time) {
+    const m = new THREE.Matrix4();
+    const r = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const e = new THREE.Euler();
+    const p = new THREE.Vector3();
+    const sc = new THREE.Vector3();
+    for (const ch of this.chunks.values()) {
+      for (const mesh of ch.userData.spinners || []) {
+        const sp = mesh.userData.spin;
+        sp.list.forEach((it, i) => {
+          const cos = Math.cos(it.yaw);
+          const sin = Math.sin(it.yaw);
+          const hz = sp.z * it.scale;
+          p.set(it.x + sin * hz, it.y + sp.y * it.scale, it.z + cos * hz);
+          q.setFromEuler(e.set(0, it.yaw, 0));
+          sc.setScalar(it.scale);
+          m.compose(p, q, sc).multiply(r.makeRotationZ(time * sp.speed + sp.phase + i));
+          mesh.setMatrixAt(i, m);
+        });
+        mesh.instanceMatrix.needsUpdate = true;
+      }
     }
   }
 
@@ -214,8 +242,11 @@ export class World {
     out.copy(tmpColor).lerp(cb, bw.t);
     const shoulder = tmpColor.setHex(bw.a.shoulder).lerp(tmpColor2.setHex(bw.b.shoulder), bw.t);
     out.lerp(shoulder, 1 - smoothstep(HALF_W + 2, HALF_W + 7, ad));
-    // Snow caps on high walls, wet sand near the sea.
+    // Exposed rock on steep valley walls, snow caps up high, wet sand near the sea.
     const rel = y - f.y;
+    const rockC = tmpColor.setHex(bw.a.rock).lerp(tmpColor2.setHex(bw.b.rock), bw.t);
+    const strata = 0.75 + 0.25 * Math.sin(y * 0.35 + n * 3);
+    out.lerp(rockC.multiplyScalar(strata), smoothstep(95, 165, ad) * smoothstep(8, 30, rel) * 0.75);
     if (rel > 60) out.lerp(tmpColor.setRGB(0.95, 0.97, 1), smoothstep(60, 110, rel) * 0.8);
     if (bw.coastW > 0 && d < 0 && y < water + 1.5) out.lerp(tmpColor.setHex(0xc9a86a), 0.6 * bw.coastW);
     const jitter = 0.9 + hash2(Math.floor(wx * 0.3), Math.floor(wz * 0.3)) * 0.18;
@@ -309,12 +340,12 @@ export class World {
     const rng = mulberry32((c + 1) * 7919 + T.seed * 13);
     const bw0 = T.blend(sStart);
     const items = {};
-    const add = (type, x, y, z, yaw, scale, color) => (items[type] ||= []).push({ x, y, z, yaw, scale, color });
+    const add = (type, x, y, z, yaw, scale, color) => (items[type] ||= []).push({ x, y, z, yaw, scale, color, r: rng() });
     const f = {};
 
     for (const biome of new Set([bw0.a, bw0.b])) {
       for (const [type, density] of Object.entries(biome.props)) {
-        const def = PROPS[type];
+        const def = type === 'billboard' ? BILLBOARD : PROPS[type];
         const count = Math.round(density * (CHUNK_LEN / 100) * (0.7 + rng() * 0.6));
         const palette = biome.tints[type] || def.tint;
         for (let n = 0; n < count; n++) {
@@ -331,10 +362,11 @@ export class World {
           if (def.onWater) {
             if (bw.coastW < 0.9 || y > water - 1.5) continue;
           } else if (seaSide && y < water + 0.6) continue;
+          if (def.beach && !(seaSide && y > water + 0.3)) continue;
           const lift = def.lift ? def.lift[0] + rng() * (def.lift[1] - def.lift[0]) : 0;
-          const yaw = def.align ? -f.h + (side < 0 ? Math.PI : 0) : rng() * Math.PI * 2;
+          const yaw = def.faceTraffic ? -f.h - side * 0.35 : def.align ? -f.h + (side < 0 ? Math.PI : 0) : rng() * Math.PI * 2;
           const sc = def.scale[0] + rng() * (def.scale[1] - def.scale[0]);
-          add(type, f.x + f.cos * d, def.onWater ? water : y + lift, f.z + f.sin * d, yaw, sc, pick(rng, palette));
+          add(def.variants ? def.variants[Math.floor(rng() * def.variants.length)] : type, f.x + f.cos * d, def.onWater ? water : y + lift, f.z + f.sin * d, yaw, sc, palette ? pick(rng, palette) : 0xffffff);
         }
       }
     }
@@ -355,6 +387,8 @@ export class World {
       }
     }
 
+    this.placeRoadside(group, sStart, sEnd, add, rng);
+
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const e = new THREE.Euler();
@@ -362,7 +396,7 @@ export class World {
     const sc = new THREE.Vector3();
     for (const [type, list] of Object.entries(items)) {
       const def = PROPS[type];
-      for (const [geo, matKey] of def.parts) {
+      for (const [geo, matKey, palette, opts] of def.parts) {
         const mesh = new THREE.InstancedMesh(geo, MATS[matKey], list.length);
         const tinted = matKey === 'tint' || matKey === 'glow' || matKey === 'building';
         list.forEach((it, i) => {
@@ -370,13 +404,102 @@ export class World {
           q.setFromEuler(e.set(0, it.yaw, 0));
           sc.setScalar(it.scale);
           mesh.setMatrixAt(i, m.compose(p, q, sc));
-          if (tinted) mesh.setColorAt(i, tmpColor.setHex(it.color));
+          if (tinted) mesh.setColorAt(i, tmpColor.setHex(palette ? palette[Math.floor(it.r * palette.length)] : it.color));
         });
+        if (opts?.spin) {
+          mesh.userData.spin = { ...opts.spin, list, phase: rng() * 6 };
+          group.userData.spinners ||= [];
+          group.userData.spinners.push(mesh);
+        }
         mesh.castShadow = !def.noShadow && matKey !== 'glow';
         mesh.receiveShadow = matKey !== 'glow' && matKey !== 'bulb';
         mesh.computeBoundingSphere();
         group.add(mesh);
       }
+    }
+  }
+
+  // Fences, power lines, guardrails and curve chevrons.
+  placeRoadside(group, sStart, sEnd, add, rng) {
+    const T = this.track;
+    const f = {};
+    const mid = T.blend((sStart + sEnd) / 2);
+    const biome = mid.t > 0.5 ? mid.b : mid.a;
+    const rs = biome.roadside || {};
+
+    if (rs.fence) {
+      for (let s = Math.ceil(sStart / 4) * 4; s < sEnd; s += 4) {
+        if (fbm(s * 0.004, 7.3, 2) < 0.48) continue;
+        T.frame(s, f);
+        for (const side of [-1, 1]) {
+          const d = side * (HALF_W + 6.5);
+          add('fence', f.x + f.cos * d, this.heightAt(f, d, T.blend(s), -1e6), f.z + f.sin * d, -f.h, 1, 0xffffff);
+        }
+      }
+    }
+
+    if (rs.power) {
+      const tops = [];
+      for (let s = Math.ceil(sStart / 45) * 45; s <= sEnd; s += 45) {
+        T.frame(s, f);
+        const d = HALF_W + 11;
+        const y = this.heightAt(f, d, T.blend(s), -1e6);
+        add('powerPole', f.x + f.cos * d, y, f.z + f.sin * d, -f.h, 1, 0xffffff);
+        tops.push({ x: f.x + f.cos * d, y: y + 10.3, z: f.z + f.sin * d, cos: f.cos, sin: f.sin });
+      }
+      const pts = [];
+      for (let i = 0; i < tops.length - 1; i++) {
+        const a = tops[i];
+        const b = tops[i + 1];
+        for (const off of [-1.4, 1.4]) {
+          for (let k = 0; k < 8; k++) {
+            for (const kk of [k, k + 1]) {
+              const t = kk / 8;
+              const sag = Math.sin(t * Math.PI) * 1.2;
+              pts.push(
+                a.x + (b.x - a.x) * t + (a.cos + (b.cos - a.cos) * t) * off,
+                a.y + (b.y - a.y) * t - sag,
+                a.z + (b.z - a.z) * t + (a.sin + (b.sin - a.sin) * t) * off,
+              );
+            }
+          }
+        }
+      }
+      if (pts.length) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+        group.add(new THREE.LineSegments(g, this.cableMat));
+      }
+    }
+
+    if (rs.rails) {
+      const sides = rs.rails === 'sea' ? [-1] : [-1, 1];
+      for (const side of sides) {
+        const d = side * (HALF_W + 1.9);
+        const rows = Math.round((sEnd - sStart) / STEP) + 1;
+        const geo = makeStrip(rows, 2, (k, j, v) => {
+          T.frame(sStart + k * STEP, f);
+          v.x = f.x + f.cos * d;
+          v.y = f.y + (j ? 0.78 : 0.42);
+          v.z = f.z + f.sin * d;
+        });
+        const rail = new THREE.Mesh(geo, this.railMat);
+        rail.castShadow = true;
+        group.add(rail);
+        for (let s = Math.ceil(sStart / 4) * 4; s < sEnd; s += 4) {
+          T.frame(s, f);
+          add('railPost', f.x + f.cos * (d + side * 0.12), f.y, f.z + f.sin * (d + side * 0.12), -f.h, 1, 0xffffff);
+        }
+      }
+    }
+
+    // Chevrons on the outside of sharp curves.
+    for (let s = Math.ceil(sStart / 22) * 22; s < sEnd; s += 22) {
+      T.frame(s, f);
+      if (Math.abs(f.k) < 0.0019) continue;
+      const side = f.k > 0 ? -1 : 1;
+      const d = side * (HALF_W + (rs.rails ? 3.0 : 2.4));
+      add(f.k > 0 ? 'chevR' : 'chevL', f.x + f.cos * d, f.y, f.z + f.sin * d, -f.h, 1, 0xffffff);
     }
   }
 
