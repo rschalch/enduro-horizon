@@ -84,6 +84,7 @@ export function initProps() {
   const [winMap, winEmi] = windowTextures();
   Object.assign(MATS, {
     tint: new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 0.9 }),
+    foliage: new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 0.9 }),
     trunk: new THREE.MeshStandardMaterial({ color: 0x7a4a2a, flatShading: true, roughness: 1 }),
     palmTrunk: new THREE.MeshStandardMaterial({ color: 0xb98d5a, flatShading: true, roughness: 1 }),
     white: new THREE.MeshStandardMaterial({ color: 0xf4f6fa, flatShading: true, roughness: 0.8 }),
@@ -111,19 +112,19 @@ export function initProps() {
   PROPS.roundTree = {
     parts: [
       [shared(cyl(0.25, 0.4, 3.2, 6)), 'trunk'],
-      [merge([ico(2.3, 0, 4.4, 0), ico(1.6, 1.2, 3.6, 0.6), ico(1.5, -1.0, 3.8, -0.5)]), 'tint'],
+      [merge([ico(2.3, 0, 4.4, 0), ico(1.6, 1.2, 3.6, 0.6), ico(1.5, -1.0, 3.8, -0.5)]), 'foliage'],
     ],
     minD: 13, maxD: 190, scale: [0.8, 1.7], tint: greens,
   };
   PROPS.pine = {
     parts: [
       [shared(cyl(0.22, 0.3, 1.6, 6)), 'trunk'],
-      [merge([cone(2.4, 3.2, 7, 0, 1.2), cone(1.9, 2.8, 7, 0, 2.9), cone(1.3, 2.4, 7, 0, 4.5)]), 'tint'],
+      [merge([cone(2.4, 3.2, 7, 0, 1.2), cone(1.9, 2.8, 7, 0, 2.9), cone(1.3, 2.4, 7, 0, 4.5)]), 'foliage'],
     ],
     minD: 13, maxD: 190, scale: [0.8, 1.9], tint: [0x2f6b4f, 0x3f7f5f],
   };
   PROPS.bush = {
-    parts: [[merge([ico(1.1, 0, 0.6, 0).scale(1, 0.8, 1), ico(0.8, 0.8, 0.45, 0.3)]), 'tint']],
+    parts: [[merge([ico(1.1, 0, 0.6, 0).scale(1, 0.8, 1), ico(0.8, 0.8, 0.45, 0.3)]), 'foliage']],
     minD: 11, maxD: 120, scale: [0.6, 1.5], tint: greens,
   };
   const petals = [];
@@ -132,9 +133,9 @@ export function initProps() {
     const r = rng() * 0.9;
     petals.push(new THREE.OctahedronGeometry(0.2).translate(Math.cos(a) * r, 0.25 + rng() * 0.2, Math.sin(a) * r));
   }
-  PROPS.flowers = { parts: [[merge(petals), 'tint']], minD: 10, maxD: 80, scale: [0.8, 1.6], tint: [0xff4d6d, 0xffd23f], noShadow: true };
+  PROPS.flowers = { parts: [[merge(petals), 'foliage']], minD: 10, maxD: 80, scale: [0.8, 1.6], tint: [0xff4d6d, 0xffd23f], noShadow: true };
   PROPS.rock = {
-    parts: [[shared(new THREE.DodecahedronGeometry(1.2).scale(1.3, 0.8, 1).translate(0, 0.45, 0)), 'tint']],
+    parts: [[shared(new THREE.DodecahedronGeometry(1.2).scale(1.3, 0.8, 1).translate(0, 0.45, 0)), 'foliage']],
     minD: 12, maxD: 190, scale: [0.5, 2.6], tint: [0x8a8f99, 0x9a9faa],
   };
   PROPS.cactus = {
@@ -144,7 +145,7 @@ export function initProps() {
       cyl(0.24, 0.24, 1.3, 6, 1.1, 1.6, 0),
       cyl(0.22, 0.22, 0.9, 6, 0, 0, 0).rotateZ(-Math.PI / 2).translate(-0.45, 2.2, 0),
       cyl(0.22, 0.22, 0.9, 6, -0.9, 2.2, 0),
-    ]), 'tint']],
+    ]), 'foliage']],
     minD: 12, maxD: 160, scale: [0.8, 1.6], tint: [0x3f9b4a, 0x5aaa48, 0x2f8a40],
   };
   PROPS.mesa = {
@@ -164,7 +165,7 @@ export function initProps() {
     );
   }
   PROPS.palm = {
-    parts: [[merge(trunk), 'palmTrunk'], [merge(leaves), 'tint']],
+    parts: [[merge(trunk), 'palmTrunk'], [merge(leaves), 'foliage']],
     minD: 12, maxD: 90, scale: [0.9, 1.35], tint: [0x2fa84f, 0x45c060, 0x1f8f45],
   };
   PROPS.balloon = {
@@ -221,7 +222,7 @@ export function initProps() {
   PROPS.poplar = {
     parts: [
       [shared(cyl(0.18, 0.26, 2.2, 6)), 'trunk'],
-      [merge([ico(1.4, 0, 3.6, 0).scale(1, 1.9, 1), ico(1.1, 0, 7.6, 0).scale(1, 1.4, 1)]), 'tint'],
+      [merge([ico(1.4, 0, 3.6, 0).scale(1, 1.9, 1), ico(1.1, 0, 7.6, 0).scale(1, 1.4, 1)]), 'foliage'],
     ],
     minD: 14, maxD: 160, scale: [0.9, 1.5], tint: greens,
   };
@@ -231,11 +232,11 @@ export function initProps() {
     const r = 0.15 + rng() * 0.35;
     blades.push(cone(0.06, 0.5 + rng() * 0.4, 3, Math.cos(a) * r, 0, Math.sin(a) * r).rotateZ((rng() - 0.5) * 0.4));
   }
-  PROPS.grass = { parts: [[merge(blades), 'tint']], minD: 9.4, maxD: 45, scale: [0.8, 1.8], tint: greens, noShadow: true };
+  PROPS.grass = { parts: [[merge(blades), 'foliage']], minD: 9.4, maxD: 45, scale: [0.8, 1.8], tint: greens, noShadow: true };
   PROPS.house = {
     parts: [
-      [merge([box(7, 3.6, 6), box(0.7, 1.6, 0.7, 1.8, 4.6, 1)]), 'tint', [0xfff4e0, 0xf6e0c0, 0xe8f0ff, 0xffe8e8, 0xdff5e0]],
-      [shared(new THREE.CylinderGeometry(4.3, 4.3, 7.4, 3, 1).rotateZ(Math.PI / 2).rotateX(-Math.PI / 2).scale(1, 0.48, 0.86).translate(0, 4.6, 0)), 'tint', [0xc0392b, 0x8e3b2a, 0x34495e, 0x6a4a8a, 0x2e6b4a]],
+      [merge([box(7, 3.6, 6), box(0.7, 1.6, 0.7, 1.8, 4.6, 1)]), 'foliage', [0xfff4e0, 0xf6e0c0, 0xe8f0ff, 0xffe8e8, 0xdff5e0]],
+      [shared(new THREE.CylinderGeometry(4.3, 4.3, 7.4, 3, 1).rotateZ(Math.PI / 2).rotateX(-Math.PI / 2).scale(1, 0.48, 0.86).translate(0, 4.6, 0)), 'foliage', [0xc0392b, 0x8e3b2a, 0x34495e, 0x6a4a8a, 0x2e6b4a]],
       [merge([box(1.1, 1.1, 0.1, -1.8, 1.4, 3.02), box(1.1, 1.1, 0.1, 1.8, 1.4, 3.02), box(1.0, 1.9, 0.1, 0, 0, 3.02), box(0.1, 1.1, 1.1, -3.52, 1.4, 0)]), 'bulb'],
     ],
     minD: 30, maxD: 170, scale: [0.9, 1.3], align: true, tint: [0xffffff],

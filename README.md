@@ -28,6 +28,24 @@ The road is laid out in designed sections: S-bends, hairpins, sweepers, hill run
 - **Highway overpasses** in the city.
 - **Roadworks:** cones and a flashing arrow board close a lane. Traffic merges, and hitting the cones slows you down hard.
 
+## Weather and night sky
+
+A day now lasts 8 minutes. Weather changes as you drive, with odds that depend on the biome:
+
+| | |
+| --- | --- |
+| ![Hurricane with a twister](docs/hurricane.png) | ![Thunderstorm in the city](docs/storm-city.png) |
+| ![Snow settling on the road](docs/snowfall.png) | ![UFO buzzing the car](docs/ufo.png) |
+
+- **Rain and thunderstorms:** slanted rain, an overcast sky, wet glossy asphalt that reflects taillights and lamps, tire spray, lightning with delayed thunder, rain sound, and less grip.
+- **Hurricanes:** near-horizontal rain, gusts that shove the car sideways, bending trees and palms, flying debris, a howling gale, rough seas and twisters crossing the horizon.
+- **Snow and blizzards:** snow settles on the ground, trees, roofs and the road. Fog thickens and grip drops.
+- **Clear nights:**
+  - shooting stars, meteor showers and fireballs that crash beyond the horizon with a distant boom
+  - every so often, a UFO: it beams up a cow, buzzes your car (flickering headlights, radio static) and then shoots off into space
+
+Debug: `?weather=clear|cloudy|rain|storm|hurricane|snow|blizzard`, `?ufo` (a UFO arrives within seconds at night), `?meteors` (4× more meteors).
+
 ## How to play
 
 | Action | Keyboard | Gamepad | Touch |
@@ -41,7 +59,7 @@ The road is laid out in designed sections: S-bends, hairpins, sweepers, hill run
 | Sound settings (volumes, mute) | `O` or the 🔊 button | — | 🔊 button |
 | Fast/Fancy graphics | `Q` | — | — |
 
-- Each **day** lasts about 3½ minutes. Pass the number of cars shown in the top-right before dawn, or the race ends.
+- Each **day** lasts about 8 minutes. Pass the number of cars shown in the top-right before dawn, or the race ends.
 - Cars that overtake you put the counter back up, like in the original.
 - Hitting a car from behind costs you most of your speed. Driving off the road slows you down.
 - Snow in **Frosty Peaks** reduces grip. Fog and night reduce how far you can see.
@@ -96,6 +114,8 @@ Debug URL parameters: `?autostart` skips the title screen, `?s=21000` starts at 
 | `src/timeofday.js` | Day-cycle keyframes and sun/moon paths |
 | `src/cars.js` / `src/traffic.js` | Rounded car models with real wheels (player 80s wedge, coupe, sedan, hatchback, van, pickup, semi); rival AI |
 | `src/weather.js` | Snow, petals and leaves |
+| `src/climate.js` | Weather system: rain, storms, hurricanes, twisters, snow cover, wind sway, spray |
+| `src/skyevents.js` | Shooting stars, fireballs and UFOs |
 | `src/audio.js` | Synthesized engine, tires, wind and effects |
 | `src/music.js` | 80s soundtrack: songs, instruments and a real-time sequencer |
 | `src/settings.js` | Sound settings panel |

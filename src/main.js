@@ -15,11 +15,13 @@ import { AudioFX } from './audio.js';
 import { Input } from './input.js';
 import { HUD } from './hud.js';
 import { initSettings } from './settings.js';
-import { initProps, updatePropLights } from './props.js';
+import { MATS, initProps, updatePropLights } from './props.js';
+import { SkyEvents } from './skyevents.js';
+import { Climate, Debris, Rain, Spray, Twister, addSnowCover, addWindSway, snowCover, windSway, windTime } from './climate.js';
 import { setFeatureEnvMap, updateFeatureLights } from './features.js';
 import { clamp, lerp, smoothstep } from './math.js';
 
-const DAY_LEN = 200; // seconds per in-game day
+const DAY_LEN = 480; // seconds per in-game day (8 minutes)
 const MAX_V = 63; // m/s, ~227 km/h
 // Top speed (m/s) of each gear at the redline; index 0 unused.
 const GEAR_TOP = [0, 16, 27, 37, 47, 56, 66];
@@ -75,6 +77,47 @@ const world = new World(scene, track);
 const env = new Environment(scene);
 const traffic = new Traffic(scene);
 const weather = new Weather(scene);
+const climate = new Climate(params.get('weather'));
+const rain = new Rain(scene);
+const spray = new Spray(scene);
+const debris = new Debris(scene);
+const twister = new Twister(scene);
+const skyEvents = new SkyEvents(scene, { ufo: params.has('ufo'), meteors: params.has('meteors') });
+let impactFlash = 0;
+skyEvents.onUfo = () => state.mode === 'race' && hud.alert('👽 UFO SIGHTING!', 'info');
+skyEvents.onFireball = () => state.mode === 'race' && hud.alert('☄️ FIREBALL!', 'info');
+skyEvents.onImpact = () => {
+  impactFlash = 0.7;
+  audio.thunder(2.5, 0.9);
+};
+for (const m of [world.terrainMat, MATS.tint, MATS.foliage, MATS.trunk, MATS.palmTrunk, MATS.fence, MATS.dark]) addSnowCover(m);
+addSnowCover(world.roadMat, 0.6);
+addWindSway(MATS.foliage);
+climate.onThunder = (delay, power) => audio.thunder(delay, power);
+climate.onChange = (w) => state.mode === 'race' && hud.alert(w.icon ? `${w.icon} ${w.label.toUpperCase()}` : '☀️ CLEARING UP', 'info');
+
+// Taillight glare stretched across wet asphalt behind every car.
+const wetGlowMat = (() => {
+  const c = document.createElement('canvas');
+  c.width = 16;
+  c.height = 128;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 128);
+  grad.addColorStop(0, 'rgba(255,40,40,0)');
+  grad.addColorStop(0.15, 'rgba(255,40,40,0.9)');
+  grad.addColorStop(1, 'rgba(255,40,40,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 16, 128);
+  return new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, color: new THREE.Color(1.6, 1.6, 1.6) });
+})();
+const wetGlowGeo = new THREE.PlaneGeometry(1.9, 7).rotateX(-Math.PI / 2).translate(0, 0.05, 6);
+function addWetGlow(model, halfLen = 2.3) {
+  const m = new THREE.Mesh(wetGlowGeo, wetGlowMat);
+  m.position.z = halfLen - 2.3;
+  m.renderOrder = 2;
+  model.add(m);
+}
+for (const c of traffic.cars) addWetGlow(c.model, c.halfLen);
 const audio = new AudioFX();
 const input = new Input();
 const hud = new HUD();
@@ -82,6 +125,7 @@ initSettings(audio);
 audio.onSongChange = (title, artist) => hud.nowPlaying(title, artist);
 const car = buildPlayerCar();
 scene.add(car);
+addWetGlow(car);
 
 const player = { s: START_S, d: 0, v: 0, latV: 0, yawVis: 0, camD: 0, shake: 0, crashCool: 0, drift: 0, offroad: false, gear: 1, rpm: 0 };
 const state = {
@@ -98,7 +142,7 @@ const state = {
   low: coarse,
   best: loadBest(),
 };
-const targetFor = (day) => Math.min(40 + (day - 1) * 10, 120);
+const targetFor = (day) => Math.min(90 + (day - 1) * 20, 260);
 const densityFor = (day) => Math.min(16 + day * 2, 32);
 
 function loadBest() {
@@ -230,7 +274,7 @@ function autopilot() {
 function updatePlayer(dt, ctl) {
   track.frame(player.s, fr);
   const bw = track.blend(player.s);
-  const grip = lerp(bw.a.grip, bw.b.grip, bw.t);
+  const grip = lerp(bw.a.grip, bw.b.grip, bw.t) * (1 - 0.22 * climate.wet) * (1 - 0.3 * climate.cover);
   const offroad = Math.abs(player.d) > HALF_W + 0.9;
   const vmax = offroad ? 24 : MAX_V;
   let acc;
@@ -246,7 +290,10 @@ function updatePlayer(dt, ctl) {
   const steerRate = (5 + Math.min(player.v, 60) * 0.17) * Math.min(1, player.v / 4);
   player.latV += (ctl.steer * steerRate - player.latV) * (1 - Math.exp(-dt * 7 * grip));
   player.drift = fr.k * player.v * player.v * 0.5 * (1.4 - 0.4 * grip);
-  player.d += (player.latV - player.drift) * dt;
+  // Crosswind gusts shove the car sideways (not inside tunnels).
+  const gust = climate.gust * (1 - tunnelFactor(player.s)) * Math.min(1, player.v / 20);
+  player.d += (player.latV - player.drift + gust) * dt;
+  if (Math.abs(climate.gust) > 1.5) player.shake = Math.max(player.shake, Math.abs(climate.gust) * 0.04);
   const limit = HALF_W + 11;
   if (Math.abs(player.d) > limit) {
     player.d = Math.sign(player.d) * limit;
@@ -355,7 +402,7 @@ function countPasses() {
 
 function advanceDay(dt) {
   if (state.mode === 'title') {
-    state.dayT = (state.dayT + dt / 90) % 1;
+    state.dayT = (state.dayT + dt / 240) % 1;
     return;
   }
   if (state.mode !== 'race') return;
@@ -509,14 +556,52 @@ function frame(now) {
 
   const bw = track.blend(player.s);
   const coastSeg = track.coastSegmentNear(player.s, 1600);
-  const tod = env.update(state.dayT, dt, car.position, camera, bw, coastSeg >= 0 ? track.waterLevel(coastSeg) : null);
   const tf = tunnelFactor(player.s);
+  climate.update(dt, (bw.t > 0.5 ? bw.b : bw.a).key, tf);
+  env.wx.cloud = climate.cloud;
+  impactFlash = Math.max(0, impactFlash - dt * 1.5);
+  env.wx.flash = Math.max(climate.flash, impactFlash * 0.6) * (1 - tf);
+  env.wx.fog = climate.fog;
+  const tod = env.update(state.dayT, dt, car.position, camera, bw, coastSeg >= 0 ? track.waterLevel(coastSeg) : null);
   env.hemi.intensity *= 1 - 0.8 * tf;
   env.sun.intensity *= 1 - 0.9 * tf;
   audio.setTunnel?.(tf);
   updateLights(tod.night, ctl.brake > 0 && player.v > 1, tf);
-  const [wType, wWeight] = weatherFor(bw);
+  let [wType, wWeight] = weatherFor(bw);
+  if (climate.snow > 0.05 && (wType !== 'snow' || climate.snow > wWeight)) [wType, wWeight] = ['snow', climate.snow];
+  else wWeight *= 1 - climate.rain; // rain washes out petals and leaves
   weather.update(dt, camera.position, wType, wWeight * (1 - tf), tod.night);
+  const light = 1 - tod.night * 0.8;
+  const carVel = new THREE.Vector3(fr.sin * player.v, 0, -fr.cos * player.v);
+  rain.update(dt, camera.position, climate.rain * (1 - tf), light, carVel, climate.wind);
+  spray.update(dt, car, player.v, climate.wet, light, camera.position);
+  audio.setRain(climate.rain, climate.wet, player.v, tf, climate.wind);
+  // Clear, dark nights: shooting stars, fireballs and the occasional UFO.
+  const clearNight = smoothstep(0.6, 0.95, tod.night) * (1 - climate.cloud) * smoothstep(300, 600, scene.fog.far);
+  const ufo = skyEvents.update(dt, { sky: clearNight, camPos: camera.position, camDir: camera.getWorldDirection(new THREE.Vector3()), track, player, tunnel: tf });
+  audio.setUfo(ufo.near, ufo.overhead * ufo.near);
+  if (ufo.overhead && Math.random() < 0.25) car.userData.spot.intensity *= 0.15; // headlights flicker
+  if (skyEvents.ufo.t > 17 && !skyEvents.ufo.leftSound && skyEvents.ufo.active) {
+    skyEvents.ufo.leftSound = true;
+    audio.ufoLeave();
+  }
+  if (!skyEvents.ufo.active) skyEvents.ufo.leftSound = false;
+  // Wet asphalt turns dark and glossy; settling snow turns it pale.
+  const wet = climate.wet;
+  const rm = world.roadMat;
+  rm.roughness = lerp(0.85, 0.12, wet);
+  rm.metalness = lerp(0.05, 0.35, wet);
+  rm.envMapIntensity = wet * 1.2;
+  rm.color.setScalar(lerp(1, 0.55, wet));
+  world.kerbMat.roughness = lerp(0.7, 0.2, wet);
+  snowCover.value = climate.cover;
+  wetGlowMat.opacity = wet * 0.6 * Math.max(tod.night, tf);
+  // Hurricane extras: bending trees, flying debris, rough sea, twisters on the horizon.
+  windTime.value = now / 1000;
+  windSway.value = climate.wind * (1 - tf);
+  debris.update(dt, camera.position, Math.max(0, climate.wind - 1.2) * 0.6 * (1 - tf), light);
+  twister.update(dt, climate.twister * (1 - tf), car.position, new THREE.Vector3(fr.sin, 0, -fr.cos), new THREE.Vector3(fr.cos, 0, fr.sin), scene.fog.color, light);
+  env.waveMap && env.oceanMat.normalScale.setScalar(0.55 + climate.wind * 0.5);
   audio.setEngine({
     rpm: player.rpmReal || IDLE_RPM,
     throttle: state.mode === 'countdown' ? ctl.rev : ctl.throttle,
@@ -529,6 +614,7 @@ function frame(now) {
   });
   const envTex = env.updateEnvMap(renderer, dt);
   if (envTex) {
+    world.roadMat.envMap = envTex;
     setCarEnvMap(envTex);
     setFeatureEnvMap(envTex, env.waveMap);
   }
@@ -549,8 +635,8 @@ function frame(now) {
   if (state.mode !== 'title') {
     hud.update({
       day: state.day,
-      todName: tod.name,
-      todIcon: tod.icon,
+      todName: climate.state === 'clear' ? tod.name : `${tod.name} · ${climate.info.label}`,
+      todIcon: climate.info.icon || tod.icon,
       dayT: Math.min(1, state.dayT),
       target: state.target,
       passed: state.passed,
@@ -570,5 +656,5 @@ applyQuality();
 resetRun('title');
 showBest();
 if (params.has('autostart')) startRace();
-window.__game = { state, player, track: () => track, traffic, camera };
+window.__game = { state, player, track: () => track, traffic, camera, skyEvents, climate };
 requestAnimationFrame(frame);

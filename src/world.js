@@ -468,7 +468,7 @@ export class World {
       const def = PROPS[type];
       for (const [geo, matKey, palette, opts] of def.parts) {
         const mesh = new THREE.InstancedMesh(geo, MATS[matKey], list.length);
-        const tinted = matKey === 'tint' || matKey === 'glow' || matKey === 'building';
+        const tinted = matKey === 'tint' || matKey === 'foliage' || matKey === 'glow' || matKey === 'building';
         list.forEach((it, i) => {
           p.set(it.x, it.y, it.z);
           q.setFromEuler(e.set(0, it.yaw, 0));

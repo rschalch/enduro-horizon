@@ -312,6 +312,10 @@ export class Environment {
     scene.add(this.sun, this.sun.target);
 
     scene.fog = new THREE.Fog(0xffffff, 100, 1000);
+    // Set by the game each frame from the weather system.
+    this.wx = { cloud: 0, flash: 0, fog: 1 };
+    this.overcastTop = new THREE.Color();
+    this.overcastHor = new THREE.Color();
   }
 
   // Rebuild the reflection map from the current sky every couple of seconds.
@@ -330,7 +334,32 @@ export class Environment {
   // t: time of day [0,1); focus: world position of the player; blend: biome blend.
   update(t, dt, focus, camera, blend, waterLevel) {
     const k = sampleTimeOfDay(t, this.tod);
-    const { sunVis, moonVis } = celestial(t, this.sunDir, this.moonDir);
+    let { sunVis, moonVis } = celestial(t, this.sunDir, this.moonDir);
+    // Weather: overcast skies go gray, hide the sun, flatten light and pull fog in.
+    const { cloud, flash, fog: wxFog } = this.wx;
+    if (cloud > 0.01 || flash > 0) {
+      const lum = 0.12 + (1 - k.night) * 0.8;
+      this.overcastTop.setRGB(0.42, 0.45, 0.5).multiplyScalar(lum);
+      this.overcastHor.setRGB(0.62, 0.65, 0.7).multiplyScalar(lum);
+      k.top.lerp(this.overcastTop, cloud * 0.85);
+      k.hor.lerp(this.overcastHor, cloud * 0.75);
+      k.gnd.lerp(this.overcastTop, cloud * 0.6);
+      k.sunI *= 1 - 0.75 * cloud;
+      k.hI *= 1 - 0.12 * cloud;
+      k.sat *= 1 - 0.32 * cloud;
+      k.con *= 1 - 0.06 * cloud;
+      sunVis *= 1 - 0.95 * cloud;
+      moonVis *= 1 - 0.9 * cloud;
+      if (flash > 0) {
+        const white = new THREE.Color(0.85, 0.88, 1);
+        k.top.lerp(white, flash * 0.7);
+        k.hor.lerp(white, flash * 0.8);
+        k.hI += flash * 2.5;
+        k.exp += flash * 0.5;
+      }
+    }
+    k.fogN *= wxFog;
+    k.fogF *= wxFog;
     const u = this.skyMat.uniforms;
     u.top.value.copy(k.top);
     u.hor.value.copy(k.hor);
@@ -356,7 +385,7 @@ export class Environment {
     this.hemi.groundColor.copy(k.hg);
     this.hemi.intensity = k.hI;
 
-    this.starMat.opacity = Math.max(0, k.night - 0.2) * 1.2 * smoothstep(200, 600, k.fogF);
+    this.starMat.opacity = Math.max(0, k.night - 0.2) * 1.2 * smoothstep(200, 600, k.fogF) * (1 - cloud);
     const cp = camera.position;
     this.sky.position.copy(cp);
     this.stars.position.copy(cp);
@@ -397,7 +426,9 @@ export class Environment {
     // Clouds pick up the sun's color, so they glow orange and pink at the ends of the day.
     const cloudCol = new THREE.Color(1, 1, 1).lerp(k.sun, 0.45).lerp(k.hor, 0.2).multiplyScalar(0.12 + (1 - k.night) * 0.98);
     this.cloudMat.color.copy(cloudCol);
-    this.cloudMat.opacity = (0.92 - k.night * 0.6) * haze;
+    cloudCol.lerp(this.overcastTop.clone().multiplyScalar(1.1), cloud * 0.7);
+    this.cloudMat.color.copy(cloudCol);
+    this.cloudMat.opacity = Math.min(1, (0.92 - k.night * 0.6) * haze + cloud * 0.5);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const e = new THREE.Euler();
@@ -412,7 +443,7 @@ export class Environment {
       if (c.z - cp.z < -R) c.z += 2 * R;
       p.set(c.x, cp.y + c.y, c.z);
       q.setFromEuler(e.set(0, c.r, 0));
-      s.setScalar(c.s);
+      s.setScalar(c.s * (1 + cloud * 1.3));
       this.clouds.setMatrixAt(i, m.compose(p, q, s));
     });
     this.clouds.instanceMatrix.needsUpdate = true;

@@ -207,6 +207,82 @@ export class AudioFX {
     this.road = this.filter('lowpass', 180, 0.7);
     this.roadGain = this.gain(0, this.sfxBus);
     this.loopNoise().connect(this.road).connect(this.roadGain);
+
+    // Rain: a bright hiss plus a softer patter band; tire swish on wet asphalt.
+    const hiss = this.filter('highpass', 2200, 0.5);
+    const air = this.filter('lowpass', 9000, 0.5);
+    this.rainGain = this.gain(0, this.sfxBus);
+    this.loopNoise().connect(hiss).connect(air).connect(this.rainGain);
+    const patter = this.filter('bandpass', 900, 0.8);
+    this.patterGain = this.gain(0, this.sfxBus);
+    this.loopNoise().connect(patter).connect(this.patterGain);
+    // Gale: a resonant howl whose pitch wanders with the gusts.
+    this.gale = this.filter('bandpass', 420, 3);
+    const howl = this.osc('sine', 0.17);
+    const howlDepth = this.gain(180);
+    howl.connect(howlDepth).connect(this.gale.frequency);
+    this.galeGain = this.gain(0, this.sfxBus);
+    this.loopNoise().connect(this.gale).connect(this.galeGain);
+    this.swish = this.filter('bandpass', 1500, 0.9);
+    this.swishGain = this.gain(0, this.sfxBus);
+    this.loopNoise().connect(this.swish).connect(this.swishGain);
+  }
+
+  // Weather ambience: rain amount, road wetness and car speed (m/s).
+  setRain(rain, wet, speed, sheltered = 0, gale = 0) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const open = 1 - sheltered;
+    this.galeGain.gain.setTargetAtTime(Math.max(0, gale - 0.8) * 0.12 * open, t, 0.4);
+    this.rainGain.gain.setTargetAtTime(rain * 0.11 * open, t, 0.3);
+    this.patterGain.gain.setTargetAtTime(rain * 0.07 * open, t, 0.3);
+    this.swishGain.gain.setTargetAtTime(wet * Math.min(1, speed / 40) * 0.09, t, 0.15);
+    this.swish.frequency.setTargetAtTime(900 + speed * 25, t, 0.2);
+  }
+
+  // UFO: an eerie warbling hum that swells as it gets close, plus radio
+  // interference (crackle, music ducking) while it hovers over the car.
+  setUfo(near, interference) {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    if (!this.ufoGain) {
+      this.ufoGain = this.gain(0, this.sfxBus);
+      const vib = this.osc('sine', 5.5);
+      const vibDepth = this.gain(28);
+      vib.connect(vibDepth);
+      for (const [f, type] of [[196, 'sine'], [199.5, 'triangle'], [392, 'sine']]) {
+        const o = this.osc(type, f);
+        vibDepth.connect(o.frequency);
+        const g = this.gain(type === 'sine' && f > 300 ? 0.25 : 0.5);
+        o.connect(g).connect(this.ufoGain);
+      }
+      this.staticGain = this.gain(0, this.sfxBus);
+      const crackle = this.filter('bandpass', 3200, 1.5);
+      const gate = this.gain(0);
+      const chop = this.osc('square', 23);
+      const chopDepth = this.gain(0.5);
+      chop.connect(chopDepth).connect(gate.gain);
+      this.loopNoise().connect(crackle).connect(gate).connect(this.staticGain);
+    }
+    const t = ctx.currentTime;
+    this.ufoGain.gain.setTargetAtTime(near * near * 0.16, t, 0.2);
+    this.staticGain.gain.setTargetAtTime(interference * 0.12, t, 0.1);
+    if (this.music?.out) this.music.out.gain.setTargetAtTime(0.85 * (1 - interference * 0.7), t, 0.2);
+  }
+
+  ufoLeave() {
+    if (!this.ctx) return;
+    this.tone({ freq: 300, freq2: 2400, type: 'sine', dur: 1.2, gain: 0.12, attack: 0.05 });
+    this.tone({ freq: 310, freq2: 2600, type: 'triangle', dur: 1.2, gain: 0.08, attack: 0.05 });
+  }
+
+  // Thunder: a sharp crack for close strikes, then a long rolling rumble.
+  thunder(delay = 1, power = 1) {
+    if (!this.ctx) return;
+    if (power > 0.75) this.burst({ freq: 1800, type: 'highpass', dur: 0.25, gain: 0.35 * power, when: delay * 0.6 });
+    for (let i = 0; i < 4; i++) {
+      this.burst({ freq: 140 + Math.random() * 120, type: 'lowpass', q: 0.7, dur: 1.6 + Math.random() * 1.8, gain: (0.55 - i * 0.1) * power, when: delay + i * (0.25 + Math.random() * 0.4) });
+    }
   }
 
   // ------------------------------------------------------------ Volume
@@ -342,6 +418,7 @@ export class AudioFX {
     const t = ctx.currentTime + when;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
+    src.loop = dur > 0.9; // long bursts (thunder) outlast the noise buffer
     const f = this.filter(type, freq, q);
     const g = this.gain(0);
     g.gain.setValueAtTime(gain, t);
