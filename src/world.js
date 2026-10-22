@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { BIOME_BLEND, BIOME_LEN, HALF_W, STEP, biomeForSegment } from './track.js';
 import { BILLBOARD, MATS, PROPS } from './props.js';
 import { buildFeatures } from './features.js';
-import { fbm, hash2, lerp, mulberry32, pick, smoothstep } from './math.js';
+import { buildSummit, inLake, lakeLevel, passAltitude } from './summit.js';
+import { clamp, fbm, hash2, lerp, mulberry32, pick, smoothstep } from './math.js';
 
 // Streams the world in 100 m chunks: road, kerbs, terrain and instanced props.
 
@@ -11,8 +12,13 @@ export const CHUNK_LEN = CS * STEP;
 const AHEAD = 1600;
 const BEHIND = 120;
 const TERRAIN_COLS = [HALF_W + 1.2, HALF_W + 3, HALF_W + 6, 17, 21, 26, 32, 40, 50, 62, 76, 92, 110, 132, 156, 178, 200];
+// Mountain passes reach much further so the valley far below is visible.
+const PASS_COLS = [...TERRAIN_COLS, 236, 280, 335, 400, 480, 580, 700];
+const FIELD_CELL = 10;
+const FIELD_R = 300;
 
 const tmpColor = new THREE.Color();
+const tmpF = {};
 const tmpColor2 = new THREE.Color();
 
 function roadTexture() {
@@ -142,10 +148,135 @@ export class World {
     this.chunks = new Map();
     this.roadMat = new THREE.MeshStandardMaterial({ map: roadTexture(), roughness: 0.85, metalness: 0.05 });
     this.kerbMat = new THREE.MeshStandardMaterial({ map: kerbTexture(), roughness: 0.7 });
-    this.terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    // Double-sided: on passes you can look at the back of another leg's mountainside.
+    this.terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide });
     this.pillarMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4, metalness: 0.3 });
     this.railMat = new THREE.MeshStandardMaterial({ color: 0xc8d0dc, metalness: 0.75, roughness: 0.3, side: THREE.DoubleSide });
     this.cableMat = new THREE.LineBasicMaterial({ color: 0x1a1a22 });
+    this.fields = new Map();
+    this.pcCache = { s: NaN, v: null };
+  }
+
+  // Mountain pass context at s: the pass, its weight and how much of the summit plateau we are on.
+  passCtx(s) {
+    if (this.pcCache.s === s && this.pcCache.n === this.track.passes.length) return this.pcCache.v;
+    const ft = this.track.passAt(s, 30);
+    let v = null;
+    if (ft) {
+      this.track.completePass(ft);
+      const w = smoothstep(ft.s0 - 20, ft.s0 + 220, s) * (1 - (ft.open ? 0 : smoothstep(ft.s1 - 260, ft.s1, s)));
+      const sum = ft.sum0 === undefined ? 0 : smoothstep(ft.sum0 - 160, ft.sum0 + 60, s) * (1 - smoothstep(ft.sum1 - 60, ft.sum1 + 160, s));
+      if (w > 0) v = { ft, w, sum };
+    }
+    this.pcCache.s = s;
+    this.pcCache.n = this.track.passes.length;
+    this.pcCache.v = v;
+    return v;
+  }
+
+  // Envelope that keeps a pass's terrain from burying (or undercutting) any of
+  // its own road legs: around every road sample the ground must stay within a
+  // cone, so the terrain between stacked switchbacks forms a proper slope.
+  passField(ft) {
+    let fld = this.fields.get(ft);
+    if (fld) return fld;
+    const T = this.track;
+    T.completePass(ft);
+    const i0 = Math.max(0, Math.floor((ft.s0 - 200) / STEP));
+    const i1 = Math.floor((ft.s1 + 200) / STEP);
+    T.ensure(i1 * STEP + 4);
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let i = i0; i <= i1; i++) {
+      x0 = Math.min(x0, T.x[i]);
+      x1 = Math.max(x1, T.x[i]);
+      z0 = Math.min(z0, T.z[i]);
+      z1 = Math.max(z1, T.z[i]);
+    }
+    x0 -= FIELD_R;
+    z0 -= FIELD_R;
+    const nx = Math.ceil((x1 + FIELD_R - x0) / FIELD_CELL) + 1;
+    const nz = Math.ceil((z1 + FIELD_R - z0) / FIELD_CELL) + 1;
+    const hi = new Float32Array(nx * nz).fill(1e9);
+    const lo = new Float32Array(nx * nz).fill(-1e9);
+    const rc = Math.ceil(FIELD_R / FIELD_CELL);
+    for (let i = i0; i <= i1; i += 4) {
+      const px = T.x[i], pz = T.z[i], py = T.y[i];
+      const cx = Math.round((px - x0) / FIELD_CELL);
+      const cz = Math.round((pz - z0) / FIELD_CELL);
+      for (let jz = Math.max(0, cz - rc); jz <= Math.min(nz - 1, cz + rc); jz++) {
+        const dz = z0 + jz * FIELD_CELL - pz;
+        for (let jx = Math.max(0, cx - rc); jx <= Math.min(nx - 1, cx + rc); jx++) {
+          const dx = x0 + jx * FIELD_CELL - px;
+          const dd = dx * dx + dz * dz;
+          if (dd > FIELD_R * FIELD_R) continue;
+          const dist = Math.sqrt(dd);
+          const j = jz * nx + jx;
+          const h = py - 0.9 + 1.15 * Math.max(0, dist - 11);
+          const l = py - 1.5 - 1.05 * Math.max(0, dist - 13);
+          if (h < hi[j]) hi[j] = h;
+          if (l > lo[j]) lo[j] = l;
+        }
+      }
+    }
+    fld = { x0, z0, nx, nz, hi, lo };
+    this.fields.set(ft, fld);
+    if (this.fields.size > 3) this.fields.delete(this.fields.keys().next().value);
+    return fld;
+  }
+
+  // Clamp a height to the pass envelope (bilinear lookup).
+  fieldClamp(fld, wx, wz, y) {
+    const gx = (wx - fld.x0) / FIELD_CELL;
+    const gz = (wz - fld.z0) / FIELD_CELL;
+    const ix = Math.floor(gx);
+    const iz = Math.floor(gz);
+    if (ix < 0 || iz < 0 || ix >= fld.nx - 1 || iz >= fld.nz - 1) return y;
+    const fx = gx - ix;
+    const fz = gz - iz;
+    const j = iz * fld.nx + ix;
+    const bil = (a) => lerp(lerp(a[j], a[j + 1], fx), lerp(a[j + fld.nx], a[j + fld.nx + 1], fx), fz);
+    const h = bil(fld.hi);
+    const l = bil(fld.lo);
+    if (l > h) return (l + h) / 2;
+    return clamp(y, l, h);
+  }
+
+  // Terrain of a mountain pass: a craggy mountainside on the uphill side, a
+  // drop to the valley floor on the other, meadows and a lake at the summit.
+  passHeight(f, d, wx, wz, pc) {
+    const ft = pc.ft;
+    const ad = Math.abs(d);
+    const side = d < 0 ? -1 : 1;
+    const a = clamp((f.u || 0) * side, -1, 1);
+    const nA = fbm(wx * 0.0045 + 11, wz * 0.0045 - 7, 4);
+    const nB = fbm(wx * 0.013 - 3, wz * 0.013 + 5, 3);
+    const ledge = 19 + pc.sum * (a > 0 ? 100 : 6);
+    const meadow = f.y - 0.12 + smoothstep(HALF_W + 4, 60, ad) * (nB - 0.4) * 7;
+    const t = Math.max(0, ad - ledge);
+    // Fine crags fade out with distance: far columns are too sparse to carry them (they turn into slivers).
+    const crag = (Math.pow(nB, 2) * 26 * smoothstep(0, 60, t) + fbm(wx * 0.05, wz * 0.05, 2) * 6 * smoothstep(5, 40, t)) * (1 - smoothstep(110, 240, ad));
+    // Steep near the road, leveling off into a ridge a few hundred meters up.
+    const rise = 280 * (1 - Math.exp((-t * (0.5 + 0.45 * nA)) / 280));
+    // Far away every leg's mountainside converges on one shared massif, so
+    // terrain from different switchbacks agrees instead of forming loose sheets.
+    // The massif is a world-space height field shared by all legs.
+    const ridge = ft.base + 20 + (ft.top - ft.base + 140) * smoothstep(0.28, 0.78, fbm(wx * 0.0022 + 3, wz * 0.0022 - 8, 4));
+    const far = smoothstep(120, 460, t);
+    const up = lerp(meadow + rise + crag + Math.pow(smoothstep(60, 520, t), 1.3) * nA * 110, ridge, far);
+    const floorY = ft.base - 10 + fbm(wx * 0.003, wz * 0.003, 3) * 34;
+    const dn = Math.max(floorY, meadow - t * (0.62 + 0.45 * nA) + crag * 0.4);
+    const mid = lerp(meadow + smoothstep(40, 300, ad) * (20 + nA * 100) + crag * 0.5, ridge, smoothstep(160, 560, ad) * 0.8);
+    let y = a >= 0 ? lerp(mid, up, a) : lerp(mid, dn, -a);
+    // The outermost columns fall back to the valley, giving far ridges a back side.
+    y = lerp(y, floorY, smoothstep(560, 700, ad));
+    if (pc.sum > 0 && side === ft.lakeSide) {
+      const e = inLake(ft, f.s, ad);
+      if (e < 1.6) {
+        const lakeY = lakeLevel(ft);
+        y = e < 1 ? Math.min(y, lakeY - 0.6 - 4.5 * (1 - e)) : lerp(lakeY + 0.35 + (e - 1) * 2, y, smoothstep(1.15, 1.6, e));
+      }
+    }
+    return y;
   }
 
   setTrack(track) {
@@ -221,7 +352,7 @@ export class World {
         const c = s < ft.s0 ? smoothstep(ft.s0 - 120, ft.s0, s) : s > ft.s1 ? smoothstep(ft.s1 + 120, ft.s1, s) : 1;
         m.cliff = Math.max(m.cliff, c);
       } else if (ft.type === 'gorge') m.gorge = Math.max(m.gorge, smoothstep(ft.s0, ft.s0 + 90, s) * smoothstep(ft.s1, ft.s1 - 90, s));
-      else if (ft.type !== 'sign') m.calm = Math.max(m.calm, smoothstep(ft.s0 - 70, ft.s0, s) * smoothstep(ft.s1 + 70, ft.s1, s));
+      else if (ft.type !== 'sign' && ft.type !== 'pass') m.calm = Math.max(m.calm, smoothstep(ft.s0 - 70, ft.s0, s) * smoothstep(ft.s1 + 70, ft.s1, s));
     }
     return m;
   }
@@ -245,6 +376,12 @@ export class World {
       y = lerp(y + wallY, beach, bw.coastW);
     } else {
       y += wallY;
+    }
+    const pc = this.passCtx(f.s);
+    if (pc) {
+      let py = this.passHeight(f, d, wx, wz, pc);
+      if (ad > 16) py = lerp(py, this.fieldClamp(this.passField(pc.ft), wx, wz, py), smoothstep(16, 30, ad));
+      y = lerp(y, py, pc.w);
     }
     if (mods.calm > 0) y = lerp(y, f.y - 0.12 + near * n1 * 2, mods.calm * 0.75);
     if (mods.gorge > 0 && ad > 14) y = Math.max(y, f.y + mods.gorge * (6 + 62 * smoothstep(14, 30, ad) + n2 * 28 + fbm(wx * 0.06, wz * 0.06, 2) * 9));
@@ -270,9 +407,30 @@ export class World {
     out.lerp(rockC.multiplyScalar(strata), Math.max(smoothstep(95, 165, ad) * smoothstep(8, 30, rel) * 0.75, smoothstep(4, 14, rel) * smoothstep(HALF_W + 2, 16, ad) * 0.85));
     if (rel > 60) out.lerp(tmpColor.setRGB(0.95, 0.97, 1), smoothstep(60, 110, rel) * 0.8);
     if (bw.coastW > 0 && d < 0 && y < water + 1.5) out.lerp(tmpColor.setHex(0xc9a86a), 0.6 * bw.coastW);
+    const pc = this.passCtx(f.s);
+    if (pc) this.passColor(f, d, y, n, pc, bw, out);
     const jitter = 0.9 + hash2(Math.floor(wx * 0.3), Math.floor(wz * 0.3)) * 0.18;
     out.multiplyScalar(jitter);
     return out;
+  }
+
+  // Pass colors by altitude: lush valley, alpine meadow, bare rock on steep
+  // faces and snow on the high crags (everything white on a snowy pass).
+  passColor(f, d, y, n, pc, bw, out) {
+    const ft = pc.ft;
+    const ad = Math.abs(d);
+    const alt = (y - ft.base) / Math.max(1, ft.top - ft.base);
+    const c = tmpColor.copy(out);
+    const shoulder = smoothstep(HALF_W + 2, HALF_W + 7, ad);
+    if (!ft.snowy) c.lerp(tmpColor2.setHex(0xa9c95a), smoothstep(0.45, 1.0, alt) * 0.55 * shoulder);
+    const ledge = 19 + pc.sum * 6;
+    const steep = Math.abs(y - f.y) / Math.max(6, ad - Math.min(ledge, 40));
+    const rockC = tmpColor2.setHex(bw.a.rock).lerp(new THREE.Color(bw.b.rock), bw.t).multiplyScalar(0.8 + 0.25 * Math.sin(y * 0.3 + n * 4));
+    c.lerp(rockC, smoothstep(0.55, 0.95, steep + (n - 0.5) * 0.5) * 0.85 * shoulder);
+    const snowLine = ft.snowy ? 0.15 : 1.08 + (n - 0.5) * 0.5;
+    const patch = ft.snowy ? 1 : smoothstep(0.35, 0.6, fbm(f.x * 0.01 + d * 0.013, f.z * 0.01 - d * 0.009, 3) + (alt - snowLine) * 0.6);
+    c.lerp(tmpColor2.setRGB(0.95, 0.97, 1), smoothstep(snowLine, snowLine + 0.18, alt) * patch * (ft.snowy ? 0.85 : 0.95) * (1 - 0.6 * smoothstep(0.8, 1.2, steep)));
+    out.lerp(c, pc.w);
   }
 
   buildChunk(c) {
@@ -331,17 +489,39 @@ export class World {
     }
 
     // Terrain, one strip per side.
-    const cols = TERRAIN_COLS.length;
+    const inPass = !!(this.track.passAt(sStart, 400) || this.track.passAt(sEnd, 400));
+    const COLS = inPass ? PASS_COLS : TERRAIN_COLS;
+    const cols = COLS.length;
+    const dMax = COLS[cols - 1];
+    // Per row: strongest left/right curvature within reach of the far columns.
+    const kWin = frames.map((f) => {
+      const w = [0, 0];
+      if (dMax <= 200) return w;
+      for (let ds = -360; ds <= 360; ds += 12) {
+        const k = T.frame(f.s + ds, tmpF).k;
+        const fade = 1 - Math.abs(ds) / 420;
+        if (k < 0) w[0] = Math.max(w[0], -k * fade);
+        else w[1] = Math.max(w[1], k * fade);
+      }
+      return w;
+    });
     const col = new THREE.Color();
     for (const side of [-1, 1]) {
       const geo = makeStrip(rows, cols, (k, j, v) => {
         const f = frames[k];
         const bw = blends[k];
-        const dShape = side < 0 ? -TERRAIN_COLS[cols - 1 - j] : TERRAIN_COLS[j];
+        const dShape = side < 0 ? -COLS[cols - 1 - j] : COLS[j];
         // On the inside of tight curves, squeeze the terrain so it never folds over itself.
         let d = dShape;
         const maxInner = f.k !== 0 ? 0.8 / Math.abs(f.k) : 1e9;
-        if (Math.sign(f.k) === side && maxInner < 200 && Math.abs(d) > 20) d = side * (20 + (Math.abs(d) - 20) * Math.max(0.2, (maxInner - 20) / 180));
+        if (Math.sign(f.k) === side && maxInner < Math.min(dMax, 200) && Math.abs(d) > 20) d = side * (20 + (Math.abs(d) - 20) * Math.max(0.2, (maxInner - 20) / 180));
+        // Far pass columns: honor the tightest same-side curve nearby, or rows would cross.
+        // The outside of hairpins is squeezed more gently, so it doesn't fan out into feathery slivers.
+        if (dMax > 200 && Math.abs(d) > 20) {
+          const w = kWin[k];
+          const reach = Math.min(0.8 / Math.max(1e-6, w[side < 0 ? 0 : 1]), 2.5 / Math.max(1e-6, w[side < 0 ? 1 : 0]));
+          if (reach < dMax) d = side * (20 + (Math.abs(dShape) - 20) * clamp((reach - 20) / (dMax - 20), 0.03, 1));
+        }
         const m = mods[k];
         const edge = j === (side < 0 ? cols - 1 : 0);
         let y;
@@ -387,6 +567,8 @@ export class World {
 
     this.placeProps(group, c, sStart, sEnd, water);
     this.placeGates(group, sStart, sEnd);
+    const pft = this.track.passAt(sStart, 200);
+    if (pft && pft.sum0 !== undefined) buildSummit(group, T, pft, sStart, sEnd, { heightAt: (f, d) => this.heightAt(f, d, T.blend(f.s), water) });
     buildFeatures(group, T, sStart, sEnd, { heightAt: (f, d) => this.heightAt(f, d, T.blend(f.s), water) });
     return group;
   }
@@ -416,6 +598,13 @@ export class World {
           if (Math.sign(d) === Math.sign(f.k) && Math.abs(d) > 0.8 / Math.abs(f.k || 1e-9) - 6) continue;
           if ((def.align || def.faceTraffic) && Math.abs(d) < 60 && this.mods(s).gorge > 0.2) continue;
           const y = this.heightAt(f, d, bw, water);
+          const pc = this.passCtx(s);
+          if (pc) {
+            const band = biome.bands?.[type];
+            const alt = (y - pc.ft.base) / Math.max(1, pc.ft.top - pc.ft.base);
+            if (band && (alt < band[0] || alt > band[1])) continue;
+            if (pc.sum > 0 && Math.sign(d) === pc.ft.lakeSide && inLake(pc.ft, s, Math.abs(d)) < 1.5) continue;
+          }
           const seaSide = bw.coastW > 0.3 && d < 0;
           if (def.onWater) {
             if (bw.coastW < 0.9 || y > water - 1.5) continue;
@@ -591,10 +780,15 @@ export class World {
     const seg = Math.floor(sEnd / BIOME_LEN) + 1;
     for (const n of [seg - 1, seg]) {
       const gs = n * BIOME_LEN - BIOME_BLEND / 2;
-      if (n >= 1 && gs >= sStart && gs < sEnd) {
+      if (n >= 1 && gs >= sStart && gs < sEnd && biomeForSegment(n) !== biomeForSegment(n - 1)) {
         const b = biomeForSegment(n);
         gates.push({ s: gs, top: 'NOW ENTERING', title: b.name, accent: b.accent });
       }
+    }
+    const pft = T.passAt(sStart, 50);
+    if (pft && pft.sum0 !== undefined && pft.sum0 + 30 >= sStart && pft.sum0 + 30 < sEnd) {
+      const accent = biomeForSegment(Math.floor(pft.s0 / BIOME_LEN)).accent;
+      gates.push({ s: pft.sum0 + 30, top: `SUMMIT · ${passAltitude(pft, pft.top).toLocaleString('en-US')} M`, title: pft.name, accent });
     }
     for (const gdef of gates) {
       const f = T.frame(gdef.s, {});

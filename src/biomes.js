@@ -30,6 +30,34 @@ export const BIOMES = [
     },
   },
   {
+    key: 'pass',
+    // pass: the biome is one long mountain pass (see Track._planPass).
+    pass: { rise: 320, name: 'Sky Pass', alt0: 1380 },
+    sections: { sweeper: 3, esses: 1.5, straight: 1 },
+    name: 'Sky Pass',
+    accent: ['#43e97b', '#38f9d7'],
+    ground: [0x6fcf4f, 0x4daa3c],
+    rock: 0x8c8478,
+    shoulder: 0xb8ab8a,
+    mountain: 0x6f8fb8,
+    snowcaps: true,
+    hills: 10, wall: 80, curve: 0.0026, grade: 0.12, grip: 1, fog: 1.35,
+    weather: null,
+    posts: 'reflector',
+    roadside: { rails: 'both' },
+    props: { pine: 7, roundTree: 2, bush: 3, flowers: 26, grass: 26, rock: 4, cabin: 0.2 },
+    // Altitude bands (fraction of the climb) where a prop may grow.
+    bands: { pine: [-1, 0.72], roundTree: [-1, 0.4], bush: [-1, 0.85] },
+    tints: {
+      pine: [0x2f6b4f, 0x3f7f5f, 0x24584a, 0x356f45],
+      roundTree: [0x4fae4a, 0x3f9a45],
+      bush: [0x4caf50, 0x3d9b40, 0x6cbf3c],
+      flowers: [0xff4d6d, 0xffd23f, 0xb15cff, 0xffffff, 0x5ab0ff, 0xff8c42],
+      grass: [0x7acc4a, 0x9ac84a, 0x5cb83c],
+      rock: [0x9a948a, 0x8a8478, 0xaaa498],
+    },
+  },
+  {
     key: 'desert',
     sections: { straight: 3, sweeper: 3, hills: 1.5, climb: 1, gorge: 1.3, arch: 0.9, works: 0.4, bridge: 0.3 },
     featureStyle: { bridge: 'arch' },
@@ -96,6 +124,8 @@ export const BIOMES = [
   },
   {
     key: 'alps',
+    pass: { rise: 270, name: 'Frost Col', alt0: 1750, snowy: true },
+    bands: { pine: [-1, 0.6] },
     sections: { sweeper: 2, esses: 2.5, hairpin: 2, climb: 1.5, tunnel: 1.4, bridge: 0.7 },
     featureStyle: { bridge: 'arch', tunnel: 'snow' },
     name: 'Frosty Peaks',
@@ -158,4 +188,5 @@ export const BIOMES = [
   },
 ];
 
-export const BIOME_ORDER = [0, 1, 2, 3, 4, 5, 6];
+// Mountain passes span two segments: 10 km of climbing, summit and descent.
+export const BIOME_ORDER = [0, 1, 1, 2, 3, 4, 5, 5, 6, 7];

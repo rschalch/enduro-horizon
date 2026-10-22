@@ -134,6 +134,45 @@ function buildRing(radius, segs, heightFn, base = -260) {
   return g;
 }
 
+// Sea of clouds seen from a mountain pass summit: soft drifting noise on a plane.
+const deckVert = /* glsl */ `
+varying vec3 vWorld;
+void main() {
+  vec4 w = modelMatrix * vec4(position, 1.0);
+  vWorld = w.xyz;
+  gl_Position = projectionMatrix * viewMatrix * w;
+}`;
+
+const deckFrag = /* glsl */ `
+uniform vec3 lit;
+uniform vec3 shade;
+uniform vec3 haze;
+uniform vec3 camPos;
+uniform float time;
+uniform float opacity;
+varying vec3 vWorld;
+float h(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float n(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(h(i), h(i + vec2(1, 0)), f.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), f.x), f.y);
+}
+float fbm(vec2 p) {
+  float s = 0.0, a = 0.5;
+  for (int i = 0; i < 5; i++) { s += a * n(p); p = p * 2.03 + 17.0; a *= 0.5; }
+  return s;
+}
+void main() {
+  vec2 p = vWorld.xz * 0.0022 + vec2(time * 0.006, time * 0.002);
+  float d = fbm(p) * 0.75 + fbm(p * 3.1 - 9.0) * 0.25;
+  float dens = smoothstep(0.32, 0.62, d);
+  float dist = length(vWorld.xz - camPos.xz);
+  vec3 col = mix(shade, lit, smoothstep(0.35, 0.85, d));
+  col = mix(col, haze, smoothstep(600.0, 3600.0, dist) * 0.8);
+  float a = dens * opacity * (1.0 - smoothstep(3000.0, 4200.0, dist));
+  gl_FragColor = vec4(col, a);
+}`;
+
 function ringMaterial() {
   return new THREE.ShaderMaterial({
     uniforms: {
@@ -314,6 +353,34 @@ export class Environment {
     scene.fog = new THREE.Fog(0xffffff, 100, 1000);
     // Set by the game each frame from the weather system.
     this.wx = { cloud: 0, flash: 0, fog: 1 };
+
+    // Mountain pass extras: the valley floor far below and a sea of clouds.
+    // pass = { w, base, deck } is set by the game while driving a pass.
+    this.pass = null;
+    this.floorMat = new THREE.MeshLambertMaterial({ color: 0x5f9a48 });
+    this.floor = new THREE.Mesh(new THREE.PlaneGeometry(12000, 12000).rotateX(-Math.PI / 2), this.floorMat);
+    this.floor.visible = false;
+    scene.add(this.floor);
+    this.deckMat = new THREE.ShaderMaterial({
+      uniforms: {
+        lit: { value: new THREE.Color() },
+        shade: { value: new THREE.Color() },
+        haze: { value: new THREE.Color() },
+        camPos: { value: new THREE.Vector3() },
+        time: { value: 0 },
+        opacity: { value: 0 },
+      },
+      vertexShader: deckVert,
+      fragmentShader: deckFrag,
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+    });
+    this.deck = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000).rotateX(-Math.PI / 2), this.deckMat);
+    this.deck.renderOrder = 2;
+    this.deck.visible = false;
+    scene.add(this.deck);
+    this.deckTime = 0;
     this.overcastTop = new THREE.Color();
     this.overcastHor = new THREE.Color();
   }
@@ -398,7 +465,10 @@ export class Environment {
     this.mountainMat.uniforms.colTop.value.copy(k.hor).lerp(mcol, 0.55 * (1 - cityW) * haze);
     this.mountainMat.uniforms.colBottom.value.copy(k.hor);
     this.mountains.visible = cityW < 0.98;
-    this.mountains.position.set(cp.x, cp.y - 80, cp.z);
+    // On a pass the far ranges stay anchored to the valley, so climbing lifts you toward them.
+    const pass = this.pass;
+    const ringY = pass ? lerp(cp.y, pass.base, pass.w) : cp.y;
+    this.mountains.position.set(cp.x, ringY - 80, cp.z);
     const snowW = (blend.a.snowcaps ? 1 - blend.t : 0) + (blend.b.snowcaps ? blend.t : 0);
     const desertW = (blend.a.key === 'desert' ? 1 - blend.t : 0) + (blend.b.key === 'desert' ? blend.t : 0);
     const snowCol = new THREE.Color(0.95, 0.97, 1).multiplyScalar(light).lerp(k.hor, 1 - 0.75 * haze);
@@ -414,7 +484,7 @@ export class Environment {
     ru.snow.value = snowW;
     ru.snowLine.value = 420;
     this.ridge.visible = cityW < 0.98;
-    this.ridge.position.set(cp.x, cp.y - 60, cp.z);
+    this.ridge.position.set(cp.x, ringY - 60, cp.z);
     const scol = new THREE.Color(0x30355a).multiplyScalar(light);
     this.skylineMat.uniforms.colTop.value.copy(k.hor).lerp(scol, 0.7 * cityW * haze);
     this.skylineMat.uniforms.colBottom.value.copy(k.hor);
@@ -447,6 +517,27 @@ export class Environment {
       this.clouds.setMatrixAt(i, m.compose(p, q, s));
     });
     this.clouds.instanceMatrix.needsUpdate = true;
+
+    // Valley floor and sea of clouds below a pass.
+    this.floor.visible = !!pass;
+    this.deck.visible = false;
+    if (pass) {
+      this.floor.position.set(cp.x, pass.base - 12, cp.z);
+      this.floorMat.color.setHex(pass.snowy ? 0xdfe8f2 : 0x5f9a48).multiplyScalar(light);
+      const above = smoothstep(pass.deck + 12, pass.deck + 60, cp.y) * pass.w;
+      if (above > 0.01) {
+        this.deck.visible = true;
+        this.deck.position.set(cp.x, pass.deck, cp.z);
+        this.deckTime += dt;
+        const du = this.deckMat.uniforms;
+        du.lit.value.setRGB(1, 1, 1).lerp(k.sun, 0.35).lerp(k.hor, 0.15).multiplyScalar(0.15 + (1 - k.night) * 0.95);
+        du.shade.value.copy(du.lit.value).multiplyScalar(0.72).lerp(k.top, 0.18);
+        du.haze.value.copy(k.hor);
+        du.camPos.value.copy(cp);
+        du.time.value = this.deckTime;
+        du.opacity.value = above * (0.95 - 0.35 * k.night) * (1 - 0.5 * cloud);
+      }
+    }
 
     // Ocean
     if (waterLevel !== null) {

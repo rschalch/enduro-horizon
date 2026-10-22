@@ -19,6 +19,7 @@ import { MATS, initProps, updatePropLights } from './props.js';
 import { SkyEvents } from './skyevents.js';
 import { Climate, Debris, Rain, Spray, Twister, addSnowCover, addWindSway, snowCover, windSway, windTime } from './climate.js';
 import { setFeatureEnvMap, updateFeatureLights } from './features.js';
+import { passAltitude } from './summit.js';
 import { clamp, lerp, smoothstep } from './math.js';
 
 const DAY_LEN = 480; // seconds per in-game day (8 minutes)
@@ -170,7 +171,7 @@ function resetRun(mode) {
   track = new Track(newSeed());
   world.setTrack(track);
   Object.assign(player, { s: START_S, d: mode === 'title' ? LANES[1] : 0, v: mode === 'title' ? 40 : 0, latV: 0, yawVis: 0, camD: 0, shake: 0, gear: 1, rpmReal: IDLE_RPM, bob: 0, bobV: 0, shiftT: 0 });
-  Object.assign(state, { day: 1, passed: 0, totalPassed: 0, target: targetFor(1), odo: 0, goalShown: false, biomeIdx: -1 });
+  Object.assign(state, { day: 1, passed: 0, totalPassed: 0, target: targetFor(1), odo: 0, goalShown: false, biomeIdx: -1, biome: null });
   state.dayT = params.has('t') ? Number(params.get('t')) : mode === 'title' ? 0.5 : 0.03;
   traffic.reset(track, player.s, mode === 'title' ? 18 : densityFor(1));
   world.update(player.s, 999);
@@ -458,6 +459,7 @@ function announceFeatures() {
     else if (ft.type === 'gorge') text = 'CANYON RUN';
     else if (ft.type === 'torii') text = 'SHRINE AVENUE';
     else if (ft.type === 'village') text = 'WELCOME TO SUNNYVALE';
+    else if (ft.type === 'pass') text = `⛰ ${ft.name.toUpperCase()} · MOUNTAIN CLIMB AHEAD`;
     announced.add(ft);
     if (text) {
       hud.alert(text, tone);
@@ -562,6 +564,8 @@ function frame(now) {
   impactFlash = Math.max(0, impactFlash - dt * 1.5);
   env.wx.flash = Math.max(climate.flash, impactFlash * 0.6) * (1 - tf);
   env.wx.fog = climate.fog;
+  const pc = world.passCtx(player.s);
+  env.pass = pc ? { w: pc.w, base: pc.ft.base, deck: pc.ft.base + 0.52 * (pc.ft.top - pc.ft.base), snowy: pc.ft.snowy } : null;
   const tod = env.update(state.dayT, dt, car.position, camera, bw, coastSeg >= 0 ? track.waterLevel(coastSeg) : null);
   env.hemi.intensity *= 1 - 0.8 * tf;
   env.sun.intensity *= 1 - 0.9 * tf;
@@ -630,7 +634,13 @@ function frame(now) {
   const domIdx = bw.t > 0.5 ? bw.seg + 1 : bw.seg;
   if (domIdx !== state.biomeIdx) {
     state.biomeIdx = domIdx;
-    if (state.mode === 'race' || state.mode === 'countdown') hud.toast('NOW ENTERING', dom.name, dom.accent);
+    if ((state.mode === 'race' || state.mode === 'countdown') && dom !== state.biome) hud.toast('NOW ENTERING', dom.name, dom.accent);
+    state.biome = dom;
+  }
+  const alt = pc ? passAltitude(pc.ft, car.position.y) : 0;
+  if (pc && state.mode === 'race' && pc.ft.sum0 !== undefined && player.s > pc.ft.sum0 && !pc.ft.cheered) {
+    pc.ft.cheered = true;
+    hud.alert(`🏔 ${pc.ft.name.toUpperCase()} SUMMIT · ${alt.toLocaleString('en-US')} M`, 'info');
   }
   if (state.mode !== 'title') {
     hud.update({
@@ -643,7 +653,7 @@ function frame(now) {
       odo: state.odo,
       speed: player.v * 3.6,
       gear: String(player.gear),
-      biome: dom.name,
+      biome: pc ? `${dom.name} · ⛰ ${alt.toLocaleString('en-US')} m` : dom.name,
       night: tod.night,
     });
   }
@@ -656,5 +666,5 @@ applyQuality();
 resetRun('title');
 showBest();
 if (params.has('autostart')) startRace();
-window.__game = { state, player, track: () => track, traffic, camera, skyEvents, climate };
+window.__game = { state, player, track: () => track, traffic, camera, skyEvents, climate, world, scene, env };
 requestAnimationFrame(frame);

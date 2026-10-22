@@ -1281,6 +1281,12 @@ export function updateFeatureLights(night, time = 0) {
   M.pool.color.setRGB(pool * 1.6, pool * 1.0, pool * 0.4);
 }
 
+// Shared feature materials (e.g. 'water') for other builders.
+export function featureMaterial(key) {
+  init();
+  return M[key];
+}
+
 // Reflections for the river water (pass the sky PMREM texture), plus an optional ripple normal map.
 export function setFeatureEnvMap(texture, normalMap = null) {
   init();

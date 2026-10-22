@@ -21,6 +21,7 @@ const ODDS = {
   desert: { clear: 8, cloudy: 1, rain: 0.6, storm: 0.6, hurricane: 0.4 },
   coast: { clear: 4, cloudy: 1.5, rain: 2, storm: 1.5, hurricane: 1.2 },
   sakura: { clear: 4, cloudy: 1.5, rain: 2.5, storm: 0.5, hurricane: 0.3, snow: 0.6 },
+  pass: { clear: 6, cloudy: 2, rain: 1.5, storm: 0.8, snow: 0.5 },
   alps: { clear: 2, cloudy: 1, snow: 4, blizzard: 2 },
   autumn: { clear: 3, cloudy: 2, rain: 3, storm: 1, hurricane: 0.5, snow: 1 },
   city: { clear: 3, cloudy: 1.5, rain: 3.5, storm: 1.5, hurricane: 0.6, snow: 0.8 },

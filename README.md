@@ -28,6 +28,14 @@ The road is laid out in designed sections: S-bends, hairpins, sweepers, hill run
 - **Highway overpasses** in the city.
 - **Roadworks:** cones and a flashing arrow board close a lane. Traffic merges, and hitting the cones slows you down hard.
 
+## Mountain passes
+
+| | |
+| --- | --- |
+| ![Above the clouds on Sky Pass](docs/pass.png) | ![Switchbacks on the climb](docs/switchbacks.png) |
+
+Two of the biomes are 10 km mountain passes. **Sky Pass** is green and summery, and **Frost Col** is covered in snow. Each one starts in the valley and climbs the valley wall, then up a stack of hairpin switchbacks (signposted, so brake). The road gains about 1,300 m of altitude, shown next to the biome name in the HUD. At the top there's a summit plateau with a gate, prayer flags, an alpine lake (frozen on Frost Col), cairns and a viewing deck. Across the drop, a sea of clouds hides the valley floor. Then the road heads down a long descent. Climbs slow you down, the lower slopes have pine forests, and higher up the slopes turn to alpine meadow, bare rock and snow.
+
 ## Weather and night sky
 
 A day now lasts 8 minutes. Weather changes as you drive, with odds that depend on the biome:
@@ -79,15 +87,16 @@ All sound is synthesized live in the browser; there are no audio files.
 
 ## The world
 
-The track is generated as you drive and never ends. Every ~5 km it passes through a new biome, marked by a gate:
+The track is generated as you drive and never ends. Every ~5 km (10 km for the passes) it passes through a new biome, marked by a gate:
 
 1. **Sunny Meadows**: rolling green hills, flowers, hot-air balloons
-2. **Painted Desert**: orange dunes, mesas, cacti, long sweeping curves
-3. **Coral Coast**: beach on one side, ocean and sailboats on the other, palm-lined boulevard with street lamps
-4. **Sakura Valley**: pink cherry trees and drifting petals
-5. **Frosty Peaks**: snow walls, pines, snowfall, slippery tight turns, steep grades
-6. **Amber Woods**: autumn forest with falling leaves
-7. **Neon Metropolis**: towers with lit windows, neon signs, a city skyline glowing at night
+2. **Sky Pass** (s=5000): a mountain pass with switchbacks, a summit lake and a sea of clouds
+3. **Painted Desert**: orange dunes, mesas, cacti, long sweeping curves
+4. **Coral Coast**: beach on one side, ocean and sailboats on the other, palm-lined boulevard with street lamps
+5. **Sakura Valley**: pink cherry trees and drifting petals
+6. **Frosty Peaks** (s=30000): the Frost Col pass, with snow walls, pines, snowfall, a frozen summit lake and slippery hairpins
+7. **Amber Woods**: autumn forest with falling leaves
+8. **Neon Metropolis**: towers with lit windows, neon signs, a city skyline glowing at night
 
 Each biome sets its own colors, terrain shape, curve tightness, rolling hills (crests hide the traffic ahead), grip, fog and weather, and neighboring biomes blend into each other. Along the road you'll find farmhouses, wind turbines, fences, power lines, guardrails, curve chevrons, 80s billboards, beach umbrellas and sailboats, mountain cabins and skyscrapers with rooftop beacons. Time of day runs on its own cycle (Dawn → Sunrise → Morning → Noon → Afternoon → Golden Hour → Sunset → Blue Hour → Night → Midnight → Fog). Each phase has its own light, fog and color grading, and at night you get street-lamp light on the road, lit windows, headlight beams and blinking beacons, so you see each place in different light from one run to the next.
 
@@ -99,16 +108,17 @@ npm run dev       # http://localhost:5173
 npm run build     # static build in dist/
 ```
 
-Debug URL parameters: `?autostart` skips the title screen, `?s=21000` starts at a given distance in meters (e.g. inside Frosty Peaks), `?t=0.75` sets the time of day (0–1), and `?seed=123` gives a repeatable track.
+Debug URL parameters: `?autostart` skips the title screen, `?s=9500` starts at a given distance in meters (e.g. at the Sky Pass summit with `seed=12345`), `?t=0.75` sets the time of day (0–1), and `?seed=123` gives a repeatable track.
 
 ## Code tour
 
 | File | What it does |
 | --- | --- |
-| `src/track.js` | Section planner (curves, hairpins, hills, set pieces), banking, biome blending, sea level |
+| `src/track.js` | Section planner (curves, hairpins, hills, set pieces, mountain passes), banking, biome blending, sea level |
 | `src/features.js` | Set-piece models: tunnels, bridges, arches, torii, overpasses, roadworks, villages, signs |
-| `src/biomes.js` | Data for the seven biomes: palettes, terrain, props, weather, grip |
-| `src/world.js` | Streams 100 m chunks: road, kerbs, terrain strips, instanced props, biome gates |
+| `src/biomes.js` | Data for the eight biomes: palettes, terrain, props, weather, grip, passes |
+| `src/world.js` | Streams 100 m chunks: road, kerbs, terrain strips, instanced props, biome gates, mountain-pass terrain |
+| `src/summit.js` | Pass summits: alpine lake, prayer flags, cairns, viewing deck |
 | `src/props.js` | Low-poly scenery models (trees, cacti, mesas, palms, buildings, lamps…) |
 | `src/sky.js` | Sky shader, sun/moon, stars, clouds, mountain/skyline rings, ocean, lights and fog |
 | `src/timeofday.js` | Day-cycle keyframes and sun/moon paths |

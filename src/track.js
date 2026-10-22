@@ -30,6 +30,7 @@ export class Track {
     this.k = [0];
     this.g = [0];
     this.b = [0];
+    this.u = [0]; // which side the mountain rises on (+1 right, -1 left), for passes
     this.queue = [];
     this.section = null;
     this.sectionLeft = 0;
@@ -37,6 +38,8 @@ export class Track {
     this.gLeft = 0;
     this.features = [];
     this.lastFeatureEnd = 0;
+    this.passes = [];
+    this.passSegs = new Set();
     this.waterCache = new Map();
   }
 
@@ -60,6 +63,11 @@ export class Track {
 
     if (s < 600) {
       q.push({ len: 600 - s, k: 0, g: 0 });
+      return;
+    }
+    if (biome.pass && bw.t === 0 && biomeForSegment(bw.seg - 1) !== biome && !this.passSegs.has(bw.seg) && local > 60 && local < 1400) {
+      this.passSegs.add(bw.seg);
+      this._planPass(s, biome, dir);
       return;
     }
     const featureOk = local > 350 && local < BIOME_LEN - BIOME_BLEND - 700 && s - this.lastFeatureEnd > 350 && s > 1200;
@@ -154,9 +162,77 @@ export class Track {
     }
   }
 
+  // A mountain pass: a long climb along the valley wall and up a stack of
+  // switchbacks, a summit plateau with a lake and a view over the clouds, then
+  // a long descent back down to the valley floor.
+  _planPass(s, biome, dir) {
+    const r = this.rng;
+    const q = this.queue;
+    const P = biome.pass;
+    const base = this.y[this.y.length - 1];
+    const top = base + P.rise;
+    const G = biome.grade;
+    const ft = { type: 'pass', s0: s, s1: Infinity, base, top, name: P.name, alt0: P.alt0, snowy: !!P.snowy, open: true, lakeSide: r() < 0.5 ? -1 : 1 };
+    this.features.push(ft);
+    this.passes.push(ft);
+    const KC = 0.011; // switchback curvature
+    const HT = 1.05; // traverse heading
+    const climb = (sec) => q.push({ capY: top, ...sec });
+    const fall = (sec) => q.push({ floorY: base, ...sec });
+    const hairpin = (push, u, turn, g) => {
+      push({ len: 60, hTo: -turn * HT, kc: 0.004, g, up: u, sign: { kind: 'curve', text: turn > 0 ? 'RIGHT' : 'LEFT' } });
+      push({ len: 120, hTo: turn * HT, kc: KC, dk: 0.0004, g: g * 0.45, up: -u, upRate: 0.02 });
+    };
+
+    // Climb: along the valley wall, up a stack of switchbacks, then a final ramp.
+    let u = r() < 0.5 ? -1 : 1;
+    climb({ len: 320 + r() * 120, k: dir * biome.curve * 0.5, g: G * 0.6, up: u });
+    climb({ len: 330, hTo: u * 0.45, kc: 0.003, g: G, up: u });
+    climb({ len: 330, hTo: -u * 0.3, kc: 0.003, g: G, up: u });
+    climb({ len: 200, hTo: -u * HT, kc: 0.0035, g: G, up: u });
+    const nUp = 4 + (r() < 0.4 ? 1 : 0);
+    for (let n = 0; n < nUp; n++) {
+      hairpin(climb, u, u, G);
+      u = -u;
+      climb({ len: 160 + r() * 120, hTo: -u * HT * 0.8, kc: 0.0025, g: G, up: u });
+    }
+    q.push({ len: 200, untilY: top, hTo: 0, kc: 0.0025, g: G * 0.85, up: u });
+
+    // Summit plateau: the lake lies on the uphill side, the drop on the other.
+    q.push({ len: 760 + r() * 200, k: -u * biome.curve * 0.25, g: 0, up: ft.lakeSide, upRate: 0.012, mark: 'summit' });
+    u = ft.lakeSide;
+
+    // Descent: switchbacks first, then long sweeping runs down the valley wall.
+    const Gd = G * 1.1;
+    fall({ len: 160, hTo: 0, kc: 0.0025, g: -Gd, up: u });
+    for (let n = 0; n < 3; n++) {
+      fall({ len: 160 + r() * 100, hTo: u * HT * 0.8, kc: 0.0025, g: -Gd, up: u });
+      hairpin(fall, u, -u, -Gd);
+      u = -u;
+    }
+    fall({ len: 400, hTo: dir * 0.5, kc: 0.003, g: -Gd, up: u });
+    fall({ len: 400, hTo: -dir * 0.4, kc: 0.003, g: -Gd, up: u });
+    q.push({ len: 200, untilY: base, hTo: 0, kc: 0.003, g: -Gd * 0.9, up: u });
+    q.push({ len: 120, k: 0, g: 0, up: 0, mark: 'passEnd' });
+  }
+
   _beginSection(sec, s) {
     this.section = sec;
     this.sectionLeft = Math.max(1, Math.round(sec.len / STEP));
+    sec.n = 0;
+    if (sec.hTo !== undefined || sec.untilY !== undefined) this.sectionLeft = 1e6; // ends on its goal
+    if (sec.mark) {
+      const ft = this.passes[this.passes.length - 1];
+      if (sec.mark === 'summit') {
+        ft.top = this.y[this.y.length - 1];
+        ft.sum0 = s;
+        ft.sum1 = s + sec.len;
+      } else {
+        ft.s1 = s + sec.len;
+        ft.open = false;
+        this.lastFeatureEnd = ft.s1;
+      }
+    }
     if (sec.sign) this.features.push({ type: 'sign', s0: s, s1: s, kind: sec.sign.kind, text: sec.sign.text });
     const f = sec.feature;
     if (!f) return;
@@ -183,10 +259,14 @@ export class Track {
     const maxK = lerp(bw.a.curve, bw.b.curve, bw.t);
     const maxG = lerp(bw.a.grade, bw.b.grade, bw.t) * (1 - bw.coastW);
 
-    // Grade: forced by the section, or rolling hills.
+    // Grade: forced by the section, or rolling hills. Passes ease off at the top and bottom.
     let gT;
+    const y0 = this.y[i];
     if (sec.g !== undefined) {
       gT = sec.g;
+      if (sec.capY !== undefined) gT *= clamp((sec.capY - y0) / 22, 0, 1);
+      if (sec.floorY !== undefined) gT *= clamp((y0 - sec.floorY) / 22, 0, 1);
+      if (sec.untilY !== undefined) gT = Math.sign(gT) * Math.max(Math.abs(gT) * clamp(Math.abs(sec.untilY - y0) / 22, 0, 1), 0.02);
     } else {
       if (--this.gLeft <= 0) {
         this.gLeft = Math.floor((70 + r() * 170) / STEP);
@@ -199,15 +279,34 @@ export class Track {
       gT = clamp(this.gTarget * roll, -maxG * roll, maxG * roll);
     }
 
-    const kT = sec.k;
-    const dk = sec.fast ? 0.00013 : Math.max(maxK / 45, 0.00004);
-    const k = this.k[i] + clamp(kT - this.k[i], -dk, dk);
+    let kT = sec.k;
+    const dk = sec.dk || (sec.fast ? 0.00013 : Math.max(maxK / 45, 0.00004));
+    const kNow = this.k[i];
+    if (sec.hTo !== undefined) {
+      // Steer toward a target heading, easing the curvature off just in time.
+      const rem = sec.hTo - this.h[i];
+      const stop = (kNow * kNow * STEP) / (2 * dk) + Math.abs(kNow) * STEP;
+      kT = Math.abs(rem) <= stop && Math.sign(rem) === Math.sign(kNow) ? 0 : Math.sign(rem) * Math.min(sec.kc, Math.abs(rem) / 40);
+    }
+    const k = kNow + clamp(kT - kNow, -dk, dk);
     const g = this.g[i] + clamp(gT - this.g[i], -0.0034, 0.0034);
     const nh = clamp(this.h[i] + k * STEP, -1.3, 1.3);
     const kEff = (nh - this.h[i]) / STEP; // stays consistent if the heading clamp kicks in
     // Bank into curves, flat on bridges, in tunnels and through roadworks.
     const bT = sec.flat ? 0 : clamp(kEff * 22, -0.09, 0.09);
     const b = this.b[i] + clamp(bT - this.b[i], -0.0025, 0.0025);
+    const uR = sec.upRate || 0.01;
+    const u = this.u[i] + clamp((sec.up || 0) - this.u[i], -uR, uR);
+
+    // Goal-driven sections end once their heading / height goal is met.
+    sec.n++;
+    const minN = sec.len / STEP;
+    if (sec.n >= minN || sec.n > 4000) {
+      const hDone = sec.hTo === undefined || (Math.abs(sec.hTo - nh) < 0.015 && Math.abs(k) < dk * 2);
+      const yNow = this.y[i] + g * STEP;
+      const yDone = sec.untilY === undefined || Math.abs(sec.untilY - yNow) < 1.5 || (sec.g > 0 ? yNow > sec.untilY : yNow < sec.untilY);
+      if ((hDone && yDone) || sec.n > 4000) this.sectionLeft = Math.min(this.sectionLeft, 1);
+    }
 
     this.x.push(this.x[i] + Math.sin(nh) * STEP);
     this.z.push(this.z[i] - Math.cos(nh) * STEP);
@@ -216,6 +315,7 @@ export class Track {
     this.k.push(kEff);
     this.g.push(g);
     this.b.push(b);
+    this.u.push(u);
   }
 
   // ---------- Queries ----------
@@ -245,6 +345,7 @@ export class Track {
     out.k = this.k[i] + (this.k[i + 1] - this.k[i]) * f;
     out.g = this.g[i] + (this.g[i + 1] - this.g[i]) * f;
     out.bank = this.b[i] + (this.b[i + 1] - this.b[i]) * f;
+    out.u = this.u[i] + (this.u[i + 1] - this.u[i]) * f;
     out.sin = Math.sin(out.h);
     out.cos = Math.cos(out.h);
     out.s = s;
@@ -254,6 +355,20 @@ export class Track {
   // Road surface height at lateral offset d (banked: the inside of a curve is lower).
   roadY(f, d) {
     return f.y - d * f.bank;
+  }
+
+  // The mountain pass around distance s (with a margin), or null.
+  passAt(s, margin = 0) {
+    for (let n = this.passes.length - 1; n >= 0; n--) {
+      const p = this.passes[n];
+      if (s >= p.s0 - margin && s <= p.s1 + margin) return p;
+    }
+    return null;
+  }
+
+  // Make sure a pass is fully laid out (its end is only known once it is generated).
+  completePass(p) {
+    while (p.open) this.ensure(this.x.length * STEP + 400);
   }
 
   featuresIn(s0, s1) {
