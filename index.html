@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="theme-color" content="#120a2a" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <title>Enduro Horizon</title>
+    <meta name="description" content="A colorful 3D endurance racer inspired by the Atari 2600 classic Enduro." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div id="vignette"></div>
+
+    <div id="hud" class="hidden">
+      <div class="panel tl">
+        <div class="day">DAY <span id="day">1</span></div>
+        <div class="tod"><span id="todIcon">☀️</span> <span id="todName">Morning</span></div>
+        <div class="daybar"><div id="dayFill"></div></div>
+      </div>
+      <div class="panel tr" id="carsPanel">
+        <div class="label">CARS TO PASS</div>
+        <div class="cars"><span id="carsLeft">0</span><span class="flag">🏁</span></div>
+      </div>
+      <div class="panel bl">
+        <div class="label">ODOMETER</div>
+        <div class="odo"><span id="odo">000.0</span><small>KM</small></div>
+        <div class="biome" id="biomeName"></div>
+      </div>
+      <div class="speedo br">
+        <svg viewBox="0 0 140 140">
+          <defs>
+            <linearGradient id="spdGrad" x1="0" y1="1" x2="1" y2="0">
+              <stop offset="0" stop-color="#00f0ff" />
+              <stop offset="0.6" stop-color="#ff2bd6" />
+              <stop offset="1" stop-color="#ffb800" />
+            </linearGradient>
+          </defs>
+          <circle cx="70" cy="70" r="56" class="track" stroke-dasharray="263.9 400" transform="rotate(135 70 70)" />
+          <circle cx="70" cy="70" r="56" id="speedArc" class="arc" stroke-dasharray="0 400" transform="rotate(135 70 70)" />
+        </svg>
+        <div class="readout">
+          <div id="speed">0</div>
+          <div class="unit">KM/H</div>
+          <div class="gear">GEAR <span id="gear">1</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast"></div>
+    <div id="center"></div>
+
+    <div id="title" class="screen">
+      <div class="logo">
+        <div class="logo-top">ENDURO</div>
+        <div class="logo-bottom">HORIZON</div>
+      </div>
+      <p class="tagline">Race through day and night across seven worlds. Pass enough cars before dawn, or your race is over.</p>
+      <button id="startBtn" class="btn">PRESS ENTER TO RACE</button>
+      <div class="controls">
+        <span><kbd>↑</kbd><kbd>W</kbd> accelerate</span>
+        <span><kbd>↓</kbd><kbd>S</kbd> brake</span>
+        <span><kbd>←</kbd><kbd>→</kbd> steer</span>
+        <span><kbd>M</kbd> music</span>
+        <span><kbd>P</kbd> pause</span>
+        <span><kbd>Q</kbd> quality</span>
+      </div>
+      <div id="best" class="best"></div>
+    </div>
+
+    <div id="gameover" class="screen hidden">
+      <div class="go-title">RACE OVER</div>
+      <div id="goStats" class="go-stats"></div>
+      <button id="retryBtn" class="btn">PRESS ENTER TO RACE AGAIN</button>
+    </div>
+
+    <div id="pause" class="screen hidden">
+      <div class="go-title">PAUSED</div>
+      <button id="resumeBtn" class="btn">PRESS P TO RESUME</button>
+    </div>
+
+    <div id="touch">
+      <div class="tgroup">
+        <button id="tLeft" aria-label="Steer left">◀</button>
+        <button id="tRight" aria-label="Steer right">▶</button>
+      </div>
+      <div class="tgroup">
+        <button id="tBrake" aria-label="Brake">■</button>
+        <button id="tGas" aria-label="Accelerate">▲</button>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
